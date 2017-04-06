@@ -1,16 +1,22 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to You under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.kafka.common.protocol.types;
+
+import org.apache.kafka.common.record.Records;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -41,7 +47,7 @@ public class Struct {
 
     /**
      * Return the value of the given pre-validated field, or if the value is missing return the default value.
-     * 
+     *
      * @param field The field for which to get the default value
      * @throws SchemaException if the field has no value and has no default.
      */
@@ -59,7 +65,7 @@ public class Struct {
 
     /**
      * Get the value for the field directly by the field index with no lookup needed (faster!)
-     * 
+     *
      * @param field The field to look up
      * @return The value for that field.
      * @throws SchemaException if the field has no value and has no default.
@@ -71,7 +77,7 @@ public class Struct {
 
     /**
      * Get the record value for the field with the given name by doing a hash table lookup (slower!)
-     * 
+     *
      * @param name The name of the field
      * @return The value in the record
      * @throws SchemaException If no such field exists
@@ -108,6 +114,10 @@ public class Struct {
         return (Byte) get(name);
     }
 
+    public Records getRecords(String name) {
+        return (Records) get(name);
+    }
+
     public Short getShort(Field field) {
         return (Short) get(field);
     }
@@ -122,6 +132,10 @@ public class Struct {
 
     public Integer getInt(String name) {
         return (Integer) get(name);
+    }
+
+    public Long getUnsignedInt(String name) {
+        return (Long) get(name);
     }
 
     public Long getLong(Field field) {
@@ -148,6 +162,14 @@ public class Struct {
         return (String) get(name);
     }
 
+    public Boolean getBoolean(Field field) {
+        return (Boolean) get(field);
+    }
+
+    public Boolean getBoolean(String name) {
+        return (Boolean) get(name);
+    }
+
     public ByteBuffer getBytes(Field field) {
         Object result = get(field);
         if (result instanceof byte[])
@@ -164,7 +186,7 @@ public class Struct {
 
     /**
      * Set the given field to the specified value
-     * 
+     *
      * @param field The field
      * @param value The value
      * @throws SchemaException If the validation of the field failed
@@ -177,7 +199,7 @@ public class Struct {
 
     /**
      * Set the field specified by the given name to the value
-     * 
+     *
      * @param name The name of the field
      * @param value The value to set
      * @throws SchemaException If the field is not known
@@ -194,7 +216,7 @@ public class Struct {
      * Create a struct for the schema of a container type (struct or array). Note that for array type, this method
      * assumes that the type is an array of schema and creates a struct of that schema. Arrays of other types can't be
      * instantiated with this method.
-     * 
+     *
      * @param field The field to create an instance of
      * @return The struct
      * @throws SchemaException If the given field is not a container type
@@ -213,7 +235,7 @@ public class Struct {
 
     /**
      * Create a struct instance for the given field which must be a container type (struct or array)
-     * 
+     *
      * @param field The name of the field to create (field must be a schema type)
      * @return The struct
      * @throws SchemaException If the given field is not a container type
@@ -264,16 +286,6 @@ public class Struct {
         this.schema.validate(this);
     }
 
-    /**
-     * Create a byte buffer containing the serialized form of the values in this struct. This method can choose to break
-     * the struct into multiple ByteBuffers if need be.
-     */
-    public ByteBuffer[] toBytes() {
-        ByteBuffer buffer = ByteBuffer.allocate(sizeOf());
-        writeTo(buffer);
-        return new ByteBuffer[] {buffer};
-    }
-
     @Override
     public String toString() {
         StringBuilder b = new StringBuilder();
@@ -282,7 +294,7 @@ public class Struct {
             Field f = this.schema.get(i);
             b.append(f.name);
             b.append('=');
-            if (f.type() instanceof ArrayOf) {
+            if (f.type() instanceof ArrayOf && this.values[i] != null) {
                 Object[] arrayValue = (Object[]) this.values[i];
                 b.append('[');
                 for (int j = 0; j < arrayValue.length; j++) {
@@ -307,9 +319,11 @@ public class Struct {
         for (int i = 0; i < this.values.length; i++) {
             Field f = this.schema.get(i);
             if (f.type() instanceof ArrayOf) {
-                Object[] arrayObject = (Object []) this.get(f);
-                for (Object arrayItem: arrayObject)
-                    result = prime * result + arrayItem.hashCode();
+                if (this.get(f) != null) {
+                    Object[] arrayObject = (Object[]) this.get(f);
+                    for (Object arrayItem: arrayObject)
+                        result = prime * result + arrayItem.hashCode();
+                }
             } else {
                 Object field = this.get(f);
                 if (field != null) {
@@ -339,7 +353,7 @@ public class Struct {
             } else {
                 Object thisField = this.get(f);
                 Object otherField = other.get(f);
-                result = (thisField == null && otherField == null) || thisField.equals(otherField);
+                return (thisField == null) ? (otherField == null) : thisField.equals(otherField);
             }
             if (!result)
                 return false;

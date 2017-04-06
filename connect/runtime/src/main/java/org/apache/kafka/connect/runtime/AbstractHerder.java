@@ -1,24 +1,25 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- **/
+ */
 package org.apache.kafka.connect.runtime;
 
 import org.apache.kafka.common.config.Config;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.ConfigKey;
+import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigValue;
 import org.apache.kafka.connect.connector.Connector;
 import org.apache.kafka.connect.errors.NotFoundException;
@@ -26,13 +27,19 @@ import org.apache.kafka.connect.runtime.rest.entities.ConfigInfo;
 import org.apache.kafka.connect.runtime.rest.entities.ConfigInfos;
 import org.apache.kafka.connect.runtime.rest.entities.ConfigKeyInfo;
 import org.apache.kafka.connect.runtime.rest.entities.ConfigValueInfo;
+import org.apache.kafka.connect.runtime.rest.entities.ConnectorInfo;
 import org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo;
+import org.apache.kafka.connect.runtime.rest.errors.BadRequestException;
+import org.apache.kafka.connect.source.SourceConnector;
+import org.apache.kafka.connect.storage.ConfigBackingStore;
 import org.apache.kafka.connect.storage.StatusBackingStore;
+import org.apache.kafka.connect.util.Callback;
 import org.apache.kafka.connect.util.ConnectorTaskId;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -65,31 +72,61 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public abstract class AbstractHerder implements Herder, TaskStatus.Listener, ConnectorStatus.Listener {
 
+    private final String workerId;
     protected final Worker worker;
     protected final StatusBackingStore statusBackingStore;
-    private final String workerId;
+    protected final ConfigBackingStore configBackingStore;
 
-    protected Map<String, Connector> tempConnectors = new ConcurrentHashMap<>();
+    private Map<String, Connector> tempConnectors = new ConcurrentHashMap<>();
+    private Thread classPathTraverser;
 
-    public AbstractHerder(Worker worker, StatusBackingStore statusBackingStore, String workerId) {
+    public AbstractHerder(Worker worker,
+                          String workerId,
+                          StatusBackingStore statusBackingStore,
+                          ConfigBackingStore configBackingStore) {
         this.worker = worker;
-        this.statusBackingStore = statusBackingStore;
         this.workerId = workerId;
+        this.statusBackingStore = statusBackingStore;
+        this.configBackingStore = configBackingStore;
     }
 
     protected abstract int generation();
 
     protected void startServices() {
+        this.worker.start();
         this.statusBackingStore.start();
+        this.configBackingStore.start();
+        traverseClassPath();
     }
 
     protected void stopServices() {
         this.statusBackingStore.stop();
+        this.configBackingStore.stop();
+        this.worker.stop();
+        if (this.classPathTraverser != null) {
+            try {
+                this.classPathTraverser.join();
+            } catch (InterruptedException e) {
+                // ignore as it can only happen during shutdown
+            }
+        }
     }
 
     @Override
     public void onStartup(String connector) {
         statusBackingStore.put(new ConnectorStatus(connector, ConnectorStatus.State.RUNNING,
+                workerId, generation()));
+    }
+
+    @Override
+    public void onPause(String connector) {
+        statusBackingStore.put(new ConnectorStatus(connector, ConnectorStatus.State.PAUSED,
+                workerId, generation()));
+    }
+
+    @Override
+    public void onResume(String connector) {
+        statusBackingStore.put(new ConnectorStatus(connector, TaskStatus.State.RUNNING,
                 workerId, generation()));
     }
 
@@ -121,10 +158,34 @@ public abstract class AbstractHerder implements Herder, TaskStatus.Listener, Con
     }
 
     @Override
+    public void onResume(ConnectorTaskId id) {
+        statusBackingStore.put(new TaskStatus(id, TaskStatus.State.RUNNING, workerId, generation()));
+    }
+
+    @Override
+    public void onPause(ConnectorTaskId id) {
+        statusBackingStore.put(new TaskStatus(id, TaskStatus.State.PAUSED, workerId, generation()));
+    }
+
+    @Override
     public void onDeletion(String connector) {
         for (TaskStatus status : statusBackingStore.getAll(connector))
             statusBackingStore.put(new TaskStatus(status.id(), TaskStatus.State.DESTROYED, workerId, generation()));
         statusBackingStore.put(new ConnectorStatus(connector, ConnectorStatus.State.DESTROYED, workerId, generation()));
+    }
+
+    @Override
+    public void pauseConnector(String connector) {
+        if (!configBackingStore.contains(connector))
+            throw new NotFoundException("Unknown connector " + connector);
+        configBackingStore.putTargetState(connector, TargetState.PAUSED);
+    }
+
+    @Override
+    public void resumeConnector(String connector) {
+        if (!configBackingStore.contains(connector))
+            throw new NotFoundException("Unknown connector " + connector);
+        configBackingStore.putTargetState(connector, TargetState.STARTED);
     }
 
     @Override
@@ -160,33 +221,44 @@ public abstract class AbstractHerder implements Herder, TaskStatus.Listener, Con
                 status.workerId(), status.trace());
     }
 
+    protected Map<String, ConfigValue> validateBasicConnectorConfig(Connector connector,
+                                                                    ConfigDef configDef,
+                                                                    Map<String, String> config) {
+        return configDef.validateAll(config);
+    }
 
     @Override
-    public ConfigInfos validateConfigs(String connType, Map<String, String> connectorConfig) {
-        ConfigDef connectorConfigDef = ConnectorConfig.configDef();
-        List<ConfigValue> connectorConfigValues = connectorConfigDef.validate(connectorConfig);
-        ConfigInfos result = generateResult(connType, connectorConfigDef.configKeys(), connectorConfigValues, Collections.<String>emptyList());
-
-        if (result.errorCount() != 0) {
-            return result;
-        }
+    public ConfigInfos validateConnectorConfig(Map<String, String> connectorConfig) {
+        String connType = connectorConfig.get(ConnectorConfig.CONNECTOR_CLASS_CONFIG);
+        if (connType == null)
+            throw new BadRequestException("Connector config " + connectorConfig + " contains no connector type");
 
         Connector connector = getConnector(connType);
 
+        final ConfigDef connectorConfigDef = ConnectorConfig.enrich(
+                (connector instanceof SourceConnector) ? SourceConnectorConfig.configDef() : SinkConnectorConfig.configDef(),
+                connectorConfig,
+                false
+        );
+
+        List<ConfigValue> configValues = new ArrayList<>();
+        Map<String, ConfigKey> configKeys = new HashMap<>();
+        List<String> allGroups = new ArrayList<>();
+
+        // do basic connector validation (name, connector type, etc.)
+        Map<String, ConfigValue> validatedConnectorConfig = validateBasicConnectorConfig(connector, connectorConfigDef, connectorConfig);
+        configValues.addAll(validatedConnectorConfig.values());
+        configKeys.putAll(connectorConfigDef.configKeys());
+        allGroups.addAll(connectorConfigDef.groups());
+
+        // do custom connector-specific validation
         Config config = connector.validate(connectorConfig);
         ConfigDef configDef = connector.config();
-        Map<String, ConfigKey> configKeys = configDef.configKeys();
-        List<ConfigValue> configValues = config.configValues();
+        configKeys.putAll(configDef.configKeys());
+        allGroups.addAll(configDef.groups());
+        configValues.addAll(config.configValues());
 
-        Map<String, ConfigKey> resultConfigKeys = new HashMap<>(configKeys);
-        resultConfigKeys.putAll(connectorConfigDef.configKeys());
-        configValues.addAll(connectorConfigValues);
-
-        List<String> allGroups = new LinkedList<>(connectorConfigDef.groups());
-        List<String> groups = configDef.groups();
-        allGroups.addAll(groups);
-
-        return generateResult(connType, resultConfigKeys, configValues, allGroups);
+        return generateResult(connType, configKeys, configValues, allGroups);
     }
 
     // public for testing
@@ -200,16 +272,18 @@ public abstract class AbstractHerder implements Herder, TaskStatus.Listener, Con
             configValueMap.put(configName, configValue);
             if (!configKeys.containsKey(configName)) {
                 configValue.addErrorMessage("Configuration is not defined: " + configName);
-                configInfoList.add(new ConfigInfo(null, convertConfigValue(configValue)));
+                configInfoList.add(new ConfigInfo(null, convertConfigValue(configValue, null)));
             }
         }
 
-        for (String configName: configKeys.keySet()) {
-            ConfigKeyInfo configKeyInfo = convertConfigKey(configKeys.get(configName));
+        for (Map.Entry<String, ConfigKey> entry : configKeys.entrySet()) {
+            String configName = entry.getKey();
+            ConfigKeyInfo configKeyInfo = convertConfigKey(entry.getValue());
+            Type type = entry.getValue().type;
             ConfigValueInfo configValueInfo = null;
             if (configValueMap.containsKey(configName)) {
                 ConfigValue configValue = configValueMap.get(configName);
-                configValueInfo = convertConfigValue(configValue);
+                configValueInfo = convertConfigValue(configValue, type);
                 errorCount += configValue.errorMessages().size();
             }
             configInfoList.add(new ConfigInfo(configKeyInfo, configValueInfo));
@@ -219,11 +293,16 @@ public abstract class AbstractHerder implements Herder, TaskStatus.Listener, Con
 
     private static ConfigKeyInfo convertConfigKey(ConfigKey configKey) {
         String name = configKey.name;
-        String type = configKey.type.name();
-        Object defaultValue = configKey.defaultValue;
+        Type type = configKey.type;
+        String typeName = configKey.type.name();
+
         boolean required = false;
-        if (defaultValue == ConfigDef.NO_DEFAULT_VALUE) {
+        String defaultValue;
+        if (ConfigDef.NO_DEFAULT_VALUE.equals(configKey.defaultValue)) {
+            defaultValue = null;
             required = true;
+        } else {
+            defaultValue = ConfigDef.convertToString(configKey.defaultValue, type);
         }
         String importance = configKey.importance.name();
         String documentation = configKey.documentation;
@@ -232,30 +311,86 @@ public abstract class AbstractHerder implements Herder, TaskStatus.Listener, Con
         String width = configKey.width.name();
         String displayName = configKey.displayName;
         List<String> dependents = configKey.dependents;
-        return new ConfigKeyInfo(name, type, required, defaultValue, importance, documentation, group, orderInGroup, width, displayName, dependents);
+        return new ConfigKeyInfo(name, typeName, required, defaultValue, importance, documentation, group, orderInGroup, width, displayName, dependents);
     }
 
-    private static ConfigValueInfo convertConfigValue(ConfigValue configValue) {
-        return new ConfigValueInfo(configValue.name(), configValue.value(), configValue.recommendedValues(), configValue.errorMessages(), configValue.visible());
+    private static ConfigValueInfo convertConfigValue(ConfigValue configValue, Type type) {
+        String value = ConfigDef.convertToString(configValue.value(), type);
+        List<String> recommendedValues = new LinkedList<>();
+
+        if (type == Type.LIST) {
+            for (Object object: configValue.recommendedValues()) {
+                recommendedValues.add(ConfigDef.convertToString(object, Type.STRING));
+            }
+        } else {
+            for (Object object : configValue.recommendedValues()) {
+                recommendedValues.add(ConfigDef.convertToString(object, type));
+            }
+        }
+        return new ConfigValueInfo(configValue.name(), value, recommendedValues, configValue.errorMessages(), configValue.visible());
     }
 
-    private Connector getConnector(String connType) {
+    protected Connector getConnector(String connType) {
         if (tempConnectors.containsKey(connType)) {
             return tempConnectors.get(connType);
         } else {
-            Connector connector = worker.getConnector(connType);
+            Connector connector = worker.getConnectorFactory().newConnector(connType);
             tempConnectors.put(connType, connector);
             return connector;
         }
     }
 
+    /**
+     * Checks a given {@link ConfigInfos} for validation error messages and adds an exception
+     * to the given {@link Callback} if any were found.
+     *
+     * @param configInfos configInfos to read Errors from
+     * @param callback callback to add config error exception to
+     * @return true if errors were found in the config
+     */
+    protected final boolean maybeAddConfigErrors(
+        ConfigInfos configInfos,
+        Callback<Created<ConnectorInfo>> callback
+    ) {
+        int errors = configInfos.errorCount();
+        boolean hasErrors = errors > 0;
+        if (hasErrors) {
+            StringBuilder messages = new StringBuilder();
+            messages.append("Connector configuration is invalid and contains the following ")
+                .append(errors).append(" error(s):");
+            for (ConfigInfo configInfo : configInfos.values()) {
+                for (String msg : configInfo.configValue().errors()) {
+                    messages.append('\n').append(msg);
+                }
+            }
+            callback.onCompletion(
+                new BadRequestException(
+                    messages.append(
+                        "\nYou can also find the above list of errors at the endpoint `/{connectorType}/config/validate`"
+                    ).toString()
+                ), null
+            );
+        }
+        return hasErrors;
+    }
+
     private String trace(Throwable t) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        t.printStackTrace(new PrintStream(output));
         try {
+            t.printStackTrace(new PrintStream(output, false, StandardCharsets.UTF_8.name()));
             return output.toString("UTF-8");
         } catch (UnsupportedEncodingException e) {
             return null;
         }
+    }
+
+    private void traverseClassPath() {
+        classPathTraverser = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                PluginDiscovery.scanClasspathForPlugins();
+            }
+        }, "CLASSPATH traversal thread.");
+        classPathTraverser.start();
     }
 }

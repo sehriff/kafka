@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,7 +17,9 @@
 package org.apache.kafka.common.protocol.types;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.fail;
 
 import java.nio.ByteBuffer;
@@ -33,30 +35,40 @@ public class ProtocolSerializationTest {
 
     @Before
     public void setup() {
-        this.schema = new Schema(new Field("int8", Type.INT8),
+        this.schema = new Schema(new Field("boolean", Type.BOOLEAN),
+                                 new Field("int8", Type.INT8),
                                  new Field("int16", Type.INT16),
                                  new Field("int32", Type.INT32),
                                  new Field("int64", Type.INT64),
+                                 new Field("varint", Type.VARINT),
+                                 new Field("varlong", Type.VARLONG),
                                  new Field("string", Type.STRING),
                                  new Field("nullable_string", Type.NULLABLE_STRING),
                                  new Field("bytes", Type.BYTES),
                                  new Field("nullable_bytes", Type.NULLABLE_BYTES),
                                  new Field("array", new ArrayOf(Type.INT32)),
+                                 new Field("null_array", ArrayOf.nullable(Type.INT32)),
                                  new Field("struct", new Schema(new Field("field", new ArrayOf(Type.INT32)))));
-        this.struct = new Struct(this.schema).set("int8", (byte) 1)
+        this.struct = new Struct(this.schema).set("boolean", true)
+                                             .set("int8", (byte) 1)
                                              .set("int16", (short) 1)
                                              .set("int32", 1)
                                              .set("int64", 1L)
+                                             .set("varint", 300)
+                                             .set("varlong", 500L)
                                              .set("string", "1")
                                              .set("nullable_string", null)
                                              .set("bytes", ByteBuffer.wrap("1".getBytes()))
                                              .set("nullable_bytes", null)
-                                             .set("array", new Object[] {1});
+                                             .set("array", new Object[] {1})
+                                             .set("null_array", null);
         this.struct.set("struct", this.struct.instance("struct").set("field", new Object[] {1, 2, 3}));
     }
 
     @Test
     public void testSimple() {
+        check(Type.BOOLEAN, false);
+        check(Type.BOOLEAN, true);
         check(Type.INT8, (byte) -111);
         check(Type.INT16, (short) -11111);
         check(Type.INT32, -11111111);
@@ -72,9 +84,14 @@ public class ProtocolSerializationTest {
         check(Type.NULLABLE_BYTES, null);
         check(Type.NULLABLE_BYTES, ByteBuffer.allocate(0));
         check(Type.NULLABLE_BYTES, ByteBuffer.wrap("abcd".getBytes()));
+        check(Type.VARINT, Integer.MAX_VALUE);
+        check(Type.VARINT, Integer.MIN_VALUE);
+        check(Type.VARLONG, Long.MAX_VALUE);
+        check(Type.VARLONG, Long.MIN_VALUE);
         check(new ArrayOf(Type.INT32), new Object[] {1, 2, 3, 4});
         check(new ArrayOf(Type.STRING), new Object[] {});
         check(new ArrayOf(Type.STRING), new Object[] {"hello", "there", "beautiful"});
+        check(ArrayOf.nullable(Type.STRING), null);
     }
 
     @Test
@@ -224,6 +241,13 @@ public class ProtocolSerializationTest {
         }
     }
 
+    @Test
+    public void testToString() {
+        String structStr = this.struct.toString();
+        assertNotNull("Struct string should not be null.", structStr);
+        assertFalse("Struct string should not be empty.", structStr.isEmpty());
+    }
+
     private Object roundtrip(Type type, Object obj) {
         ByteBuffer buffer = ByteBuffer.allocate(type.sizeOf(obj));
         type.write(buffer, obj);
@@ -243,4 +267,15 @@ public class ProtocolSerializationTest {
         assertEquals("The object read back should be the same as what was written.", obj, result);
     }
 
+    @Test
+    public void testStructEquals() {
+        Schema schema = new Schema(new Field("field1", Type.NULLABLE_STRING), new Field("field2", Type.NULLABLE_STRING));
+        Struct emptyStruct1 = new Struct(schema);
+        Struct emptyStruct2 = new Struct(schema);
+        assertEquals(emptyStruct1, emptyStruct2);
+
+        Struct mostlyEmptyStruct = new Struct(schema).set("field1", "foo");
+        assertNotEquals(emptyStruct1, mostlyEmptyStruct);
+        assertNotEquals(mostlyEmptyStruct, emptyStruct1);
+    }
 }

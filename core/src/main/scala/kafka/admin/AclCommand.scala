@@ -29,8 +29,8 @@ object AclCommand {
 
   val Newline = scala.util.Properties.lineSeparator
   val ResourceTypeToValidOperations = Map[ResourceType, Set[Operation]] (
-    Topic -> Set(Read, Write, Describe, All),
-    Group -> Set(Read, All),
+    Topic -> Set(Read, Write, Describe, All, Delete),
+    Group -> Set(Read, Describe, All),
     Cluster -> Set(Create, ClusterAction, All)
   )
 
@@ -54,7 +54,7 @@ object AclCommand {
       case e: Throwable =>
         println(s"Error while executing ACL command: ${e.getMessage}")
         println(Utils.stackTrace(e))
-        System.exit(-1)
+        Exit.exit(1)
     }
   }
 
@@ -84,7 +84,6 @@ object AclCommand {
         CommandLineUtils.printUsageAndDie(opts.parser, "You must specify one of: --allow-principal, --deny-principal when trying to add ACLs.")
 
       for ((resource, acls) <- resourceToAcl) {
-        val acls = resourceToAcl(resource)
         println(s"Adding ACLs for resource `${resource}`: $Newline ${acls.map("\t" + _).mkString(Newline)} $Newline")
         authorizer.addAcls(acls, resource)
       }
@@ -99,10 +98,10 @@ object AclCommand {
 
       for ((resource, acls) <- resourceToAcl) {
         if (acls.isEmpty) {
-          if (confirmAction(s"Are you sure you want to delete all ACLs for resource `${resource}`? (y/n)"))
+          if (confirmAction(opts, s"Are you sure you want to delete all ACLs for resource `${resource}`? (y/n)"))
             authorizer.removeAcls(resource)
         } else {
-          if (confirmAction(s"Are you sure you want to remove ACLs: $Newline ${acls.map("\t" + _).mkString(Newline)} $Newline from resource `${resource}`? (y/n)"))
+          if (confirmAction(opts, s"Are you sure you want to remove ACLs: $Newline ${acls.map("\t" + _).mkString(Newline)} $Newline from resource `${resource}`? (y/n)"))
             authorizer.removeAcls(acls, resource)
         }
       }
@@ -117,7 +116,7 @@ object AclCommand {
 
       val resourceToAcls: Iterable[(Resource, Set[Acl])] =
         if (resources.isEmpty) authorizer.getAcls()
-        else resources.map(resource => (resource -> authorizer.getAcls(resource)))
+        else resources.map(resource => resource -> authorizer.getAcls(resource))
 
       for ((resource, acls) <- resourceToAcls)
         println(s"Current ACLs for resource `${resource}`: $Newline ${acls.map("\t" + _).mkString(Newline)} $Newline")
@@ -241,7 +240,9 @@ object AclCommand {
     resources
   }
 
-  private def confirmAction(msg: String): Boolean = {
+  private def confirmAction(opts: AclCommandOptions, msg: String): Boolean = {
+    if (opts.options.has(opts.forceOpt))
+        return true
     println(msg)
     Console.readLine().equalsIgnoreCase("y")
   }
@@ -328,6 +329,8 @@ object AclCommand {
       "This will generate ACLs that allows READ,DESCRIBE on topic and READ on group.")
 
     val helpOpt = parser.accepts("help", "Print usage information.")
+
+    val forceOpt = parser.accepts("force", "Assume Yes to all queries and do not prompt.")
 
     val options = parser.parse(args: _*)
 

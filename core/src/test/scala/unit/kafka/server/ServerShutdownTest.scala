@@ -81,7 +81,7 @@ class ServerShutdownTest extends ZooKeeperTestHarness {
     TestUtils.waitUntilMetadataIsPropagated(Seq(server), topic, 0)
 
     producer = createProducer(server)
-    val consumer = new SimpleConsumer(host, server.boundPort(), 1000000, 64*1024, "")
+    val consumer = new SimpleConsumer(host, TestUtils.boundPort(server), 1000000, 64*1024, "")
 
     var fetchedMessage: ByteBufferMessageSet = null
     while (fetchedMessage == null || fetchedMessage.validBytes == 0) {
@@ -104,7 +104,7 @@ class ServerShutdownTest extends ZooKeeperTestHarness {
     consumer.close()
     producer.close()
     server.shutdown()
-    CoreUtils.rm(server.config.logDirs)
+    CoreUtils.delete(server.config.logDirs)
     verifyNonDaemonThreadsStatus
   }
 
@@ -117,7 +117,7 @@ class ServerShutdownTest extends ZooKeeperTestHarness {
     server.startup()
     server.shutdown()
     server.awaitShutdown()
-    CoreUtils.rm(server.config.logDirs)
+    CoreUtils.delete(server.config.logDirs)
     verifyNonDaemonThreadsStatus
   }
 
@@ -129,23 +129,21 @@ class ServerShutdownTest extends ZooKeeperTestHarness {
     val server = new KafkaServer(newConfig, threadNamePrefix = Option(this.getClass.getName))
     try {
       server.startup()
-      fail("Expected KafkaServer setup to fail, throw exception")
+      fail("Expected KafkaServer setup to fail and throw exception")
     }
     catch {
       // Try to clean up carefully without hanging even if the test fails. This means trying to accurately
       // identify the correct exception, making sure the server was shutdown, and cleaning up if anything
       // goes wrong so that awaitShutdown doesn't hang
-      case e: org.I0Itec.zkclient.exception.ZkException =>
+      case _: org.I0Itec.zkclient.exception.ZkException =>
         assertEquals(NotRunning.state, server.brokerState.currentState)
-      case e: Throwable =>
-        fail("Expected ZkException during Kafka server starting up but caught a different exception %s".format(e.toString))
     }
     finally {
       if (server.brokerState.currentState != NotRunning.state)
         server.shutdown()
       server.awaitShutdown()
     }
-    CoreUtils.rm(server.config.logDirs)
+    CoreUtils.delete(server.config.logDirs)
     verifyNonDaemonThreadsStatus
   }
 
@@ -170,7 +168,7 @@ class ServerShutdownTest extends ZooKeeperTestHarness {
       assertTrue(true)
     }
     catch{
-      case ex: Throwable => fail()
+      case _: Throwable => fail()
     }
   }
 }

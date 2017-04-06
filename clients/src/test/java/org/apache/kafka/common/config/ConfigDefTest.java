@@ -1,14 +1,18 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to You under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.kafka.common.config;
 
@@ -31,6 +35,7 @@ import java.util.Properties;
 
 import static java.util.Arrays.asList;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 
 public class ConfigDefTest {
@@ -91,6 +96,12 @@ public class ConfigDefTest {
         new ConfigDef().define("a", Type.INT, Importance.HIGH, "docs").parse(new HashMap<String, Object>());
     }
 
+    @Test
+    public void testParsingEmptyDefaultValueForStringFieldShouldSucceed() {
+        new ConfigDef().define("a", Type.STRING, "", ConfigDef.Importance.HIGH, "docs")
+                .parse(new HashMap<String, Object>());
+    }
+
     @Test(expected = ConfigException.class)
     public void testDefinedTwice() {
         new ConfigDef().define("a", Type.STRING, Importance.HIGH, "docs").define("a", Type.INT, Importance.HIGH, "docs");
@@ -132,9 +143,10 @@ public class ConfigDefTest {
 
     @Test
     public void testValidators() {
-        testValidators(Type.INT, Range.between(0, 10), 5, new Object[]{1, 5, 9}, new Object[]{-1, 11});
+        testValidators(Type.INT, Range.between(0, 10), 5, new Object[]{1, 5, 9}, new Object[]{-1, 11, null});
         testValidators(Type.STRING, ValidString.in("good", "values", "default"), "default",
-                new Object[]{"good", "values", "default"}, new Object[]{"bad", "inputs"});
+                new Object[]{"good", "values", "default"}, new Object[]{"bad", "inputs", null});
+        testValidators(Type.LIST, ConfigDef.ValidList.in("1", "2", "3"), "1", new Object[]{"1", "2", "3"}, new Object[]{"4", "5", "6"});
     }
 
     @Test
@@ -221,7 +233,7 @@ public class ConfigDefTest {
 
         Map<String, ConfigValue> configValues = new HashMap<>();
 
-        for (String name: def.configKeys().keySet()) {
+        for (String name : def.configKeys().keySet()) {
             configValues.put(name, new ConfigValue(name));
         }
 
@@ -236,12 +248,11 @@ public class ConfigDefTest {
         Map<String, ConfigValue> expected = new HashMap<>();
         String errorMessageB = "Missing required configuration \"b\" which has no default value.";
         String errorMessageC = "Missing required configuration \"c\" which has no default value.";
-        String errorMessageD = "Invalid value for configuration d";
 
         ConfigValue configA = new ConfigValue("a", 1, Arrays.<Object>asList(1, 2, 3), Collections.<String>emptyList());
         ConfigValue configB = new ConfigValue("b", null, Arrays.<Object>asList(4, 5), Arrays.asList(errorMessageB, errorMessageB));
         ConfigValue configC = new ConfigValue("c", null, Arrays.<Object>asList(4, 5), Arrays.asList(errorMessageC));
-        ConfigValue configD = new ConfigValue("d", 10, Arrays.<Object>asList(1, 2, 3), Arrays.asList(errorMessageD));
+        ConfigValue configD = new ConfigValue("d", 10, Arrays.<Object>asList(1, 2, 3), Collections.<String>emptyList());
 
         expected.put("a", configA);
         expected.put("b", configB);
@@ -319,6 +330,27 @@ public class ConfigDefTest {
         }
     }
 
+    @Test
+    public void testCanAddInternalConfig() throws Exception {
+        final String configName = "internal.config";
+        final ConfigDef configDef = new ConfigDef().defineInternal(configName, Type.STRING, "", Importance.LOW);
+        final HashMap<String, String> properties = new HashMap<>();
+        properties.put(configName, "value");
+        final List<ConfigValue> results = configDef.validate(properties);
+        final ConfigValue configValue = results.get(0);
+        assertEquals("value", configValue.value());
+        assertEquals(configName, configValue.name());
+    }
+
+    @Test
+    public void testInternalConfigDoesntShowUpInDocs() throws Exception {
+        final String name = "my.config";
+        final ConfigDef configDef = new ConfigDef().defineInternal(name, Type.STRING, "", Importance.LOW);
+        assertFalse(configDef.toHtmlTable().contains("my.config"));
+        assertFalse(configDef.toEnrichedRst().contains("my.config"));
+        assertFalse(configDef.toRst().contains("my.config"));
+    }
+
     private static class IntegerRecommender implements ConfigDef.Recommender {
 
         private boolean hasParent;
@@ -364,4 +396,99 @@ public class ConfigDefTest {
             }
         }
     }
+
+    @Test
+    public void toRst() {
+        final ConfigDef def = new ConfigDef()
+                .define("opt1", Type.STRING, "a", ValidString.in("a", "b", "c"), Importance.HIGH, "docs1")
+                .define("opt2", Type.INT, Importance.MEDIUM, "docs2")
+                .define("opt3", Type.LIST, Arrays.asList("a", "b"), Importance.LOW, "docs3");
+
+        final String expectedRst = "" +
+                "``opt2``\n" +
+                "  docs2\n" +
+                "\n" +
+                "  * Type: int\n" +
+                "  * Importance: medium\n" +
+                "\n" +
+                "``opt1``\n" +
+                "  docs1\n" +
+                "\n" +
+                "  * Type: string\n" +
+                "  * Default: a\n" +
+                "  * Valid Values: [a, b, c]\n" +
+                "  * Importance: high\n" +
+                "\n" +
+                "``opt3``\n" +
+                "  docs3\n" +
+                "\n" +
+                "  * Type: list\n" +
+                "  * Default: a,b\n" +
+                "  * Importance: low\n" +
+                "\n";
+
+        assertEquals(expectedRst, def.toRst());
+    }
+
+    @Test
+    public void toEnrichedRst() {
+        final ConfigDef def = new ConfigDef()
+                .define("opt1.of.group1", Type.STRING, "a", ValidString.in("a", "b", "c"), Importance.HIGH, "Doc doc.",
+                        "Group One", 0, Width.NONE, "..", Collections.<String>emptyList())
+                .define("opt2.of.group1", Type.INT, ConfigDef.NO_DEFAULT_VALUE, Importance.MEDIUM, "Doc doc doc.",
+                        "Group One", 1, Width.NONE, "..", Arrays.asList("some.option1", "some.option2"))
+                .define("opt2.of.group2", Type.BOOLEAN, false, Importance.HIGH, "Doc doc doc doc.",
+                        "Group Two", 1, Width.NONE, "..", Collections.<String>emptyList())
+                .define("opt1.of.group2", Type.BOOLEAN, false, Importance.HIGH, "Doc doc doc doc doc.",
+                        "Group Two", 0, Width.NONE, "..", Collections.singletonList("some.option"))
+                .define("poor.opt", Type.STRING, "foo", Importance.HIGH, "Doc doc doc doc.");
+
+        final String expectedRst = "" +
+                "``poor.opt``\n" +
+                "  Doc doc doc doc.\n" +
+                "\n" +
+                "  * Type: string\n" +
+                "  * Default: foo\n" +
+                "  * Importance: high\n" +
+                "\n" +
+                "Group One\n" +
+                "^^^^^^^^^\n" +
+                "\n" +
+                "``opt1.of.group1``\n" +
+                "  Doc doc.\n" +
+                "\n" +
+                "  * Type: string\n" +
+                "  * Default: a\n" +
+                "  * Valid Values: [a, b, c]\n" +
+                "  * Importance: high\n" +
+                "\n" +
+                "``opt2.of.group1``\n" +
+                "  Doc doc doc.\n" +
+                "\n" +
+                "  * Type: int\n" +
+                "  * Importance: medium\n" +
+                "  * Dependents: ``some.option1``, ``some.option2``\n" +
+                "\n" +
+                "Group Two\n" +
+                "^^^^^^^^^\n" +
+                "\n" +
+                "``opt1.of.group2``\n" +
+                "  Doc doc doc doc doc.\n" +
+                "\n" +
+                "  * Type: boolean\n" +
+                "  * Default: false\n" +
+                "  * Importance: high\n" +
+                "  * Dependents: ``some.option``\n" +
+                "\n" +
+                "``opt2.of.group2``\n" +
+                "  Doc doc doc doc.\n" +
+                "\n" +
+                "  * Type: boolean\n" +
+                "  * Default: false\n" +
+                "  * Importance: high\n" +
+                "\n";
+
+        assertEquals(expectedRst, def.toEnrichedRst());
+    }
+
 }

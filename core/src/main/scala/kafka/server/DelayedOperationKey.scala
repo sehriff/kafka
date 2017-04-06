@@ -36,8 +36,6 @@ case class TopicPartitionOperationKey(topic: String, partition: Int) extends Del
 
   def this(topicPartition: TopicPartition) = this(topicPartition.topic, topicPartition.partition)
 
-  def this(topicAndPartition: TopicAndPartition) = this(topicAndPartition.topic, topicAndPartition.partition)
-
   override def keyLabel = "%s-%d".format(topic, partition)
 }
 
@@ -51,4 +49,10 @@ case class MemberKey(groupId: String, consumerId: String) extends DelayedOperati
 case class GroupKey(groupId: String) extends DelayedOperationKey {
 
   override def keyLabel = groupId
+}
+
+/* used by delayed-topic operations */
+case class TopicKey(topic: String) extends DelayedOperationKey {
+
+  override def keyLabel = topic
 }

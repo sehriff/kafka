@@ -23,6 +23,8 @@ import kafka.utils.nonthreadsafe
 
 import scala.collection.Map
 
+import org.apache.kafka.common.protocol.Errors
+
 
 case class MemberSummary(memberId: String,
                          clientId: String,
@@ -55,12 +57,14 @@ private[coordinator] class MemberMetadata(val memberId: String,
                                           val groupId: String,
                                           val clientId: String,
                                           val clientHost: String,
+                                          val rebalanceTimeoutMs: Int,
                                           val sessionTimeoutMs: Int,
+                                          val protocolType: String,
                                           var supportedProtocols: List[(String, Array[Byte])]) {
 
   var assignment: Array[Byte] = Array.empty[Byte]
   var awaitingJoinCallback: JoinGroupResult => Unit = null
-  var awaitingSyncCallback: (Array[Byte], Short) => Unit = null
+  var awaitingSyncCallback: (Array[Byte], Errors) => Unit = null
   var latestHeartbeat: Long = -1
   var isLeaving: Boolean = false
 
@@ -90,7 +94,7 @@ private[coordinator] class MemberMetadata(val memberId: String,
       if (p1._1 != p2._1 || !util.Arrays.equals(p1._2, p2._2))
         return false
     }
-    return true
+    true
   }
 
   def summary(protocol: String): MemberSummary = {

@@ -1,49 +1,46 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to You under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.kafka.common.network;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.File;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.util.Arrays;
+import java.util.Map;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.config.SslConfigs;
+import org.apache.kafka.common.config.types.Password;
+import org.apache.kafka.common.security.TestSecurityConfig;
 import org.apache.kafka.common.security.ssl.SslFactory;
 import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.protocol.SecurityProtocol;
 import org.apache.kafka.common.utils.MockTime;
-import org.apache.kafka.common.config.types.Password;
-import org.apache.kafka.common.utils.Utils;
-import org.apache.kafka.test.TestSslUtils;
+import org.apache.kafka.test.TestCondition;
 import org.apache.kafka.test.TestUtils;
 import org.junit.After;
 import org.junit.Before;
@@ -56,7 +53,7 @@ public class SslTransportLayerTest {
 
     private static final int BUFFER_SIZE = 4 * 1024;
 
-    private SslEchoServer server;
+    private NioEchoServer server;
     private Selector selector;
     private ChannelBuilder channelBuilder;
     private CertStores serverCertStores;
@@ -91,13 +88,13 @@ public class SslTransportLayerTest {
     @Test
     public void testValidEndpointIdentification() throws Exception {
         String node = "0";
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         sslClientConfigs.put(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG, "HTTPS");
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
     
     /**
@@ -113,12 +110,12 @@ public class SslTransportLayerTest {
         sslServerConfigs = serverCertStores.getTrustingConfig(clientCertStores);
         sslClientConfigs = clientCertStores.getTrustingConfig(serverCertStores);
         sslClientConfigs.put(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG, "HTTPS");
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        waitForChannelClose(node);
+        NetworkTestUtils.waitForChannelClose(selector, node);
     }
     
     /**
@@ -129,14 +126,16 @@ public class SslTransportLayerTest {
     public void testEndpointIdentificationDisabled() throws Exception {
         String node = "0";
         String serverHost = InetAddress.getLocalHost().getHostAddress();
-        server = new SslEchoServer(sslServerConfigs, serverHost);
+        SecurityProtocol securityProtocol = SecurityProtocol.SSL;
+        server = new NioEchoServer(ListenerName.forSecurityProtocol(securityProtocol), securityProtocol,
+                new TestSecurityConfig(sslServerConfigs), serverHost);
         server.start();
         sslClientConfigs.remove(SslConfigs.SSL_ENDPOINT_IDENTIFICATION_ALGORITHM_CONFIG);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress(serverHost, server.port);
+        InetSocketAddress addr = new InetSocketAddress(serverHost, server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
     
     /**
@@ -147,12 +146,52 @@ public class SslTransportLayerTest {
     public void testClientAuthenticationRequiredValidProvided() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "required");
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
+    }
+
+    /**
+     * Tests that disabling client authentication as a listener override has the desired effect.
+     */
+    @Test
+    public void testListenerConfigOverride() throws Exception {
+        String node = "0";
+        ListenerName clientListenerName = new ListenerName("client");
+        sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "required");
+        sslServerConfigs.put(clientListenerName.configPrefix() + SslConfigs.SSL_CLIENT_AUTH_CONFIG, "none");
+
+        // `client` listener is not configured at this point, so client auth should be required
+        server = createEchoServer(SecurityProtocol.SSL);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
+
+        // Connect with client auth should work fine
+        createSelector(sslClientConfigs);
+        selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
+        selector.close();
+
+        // Remove client auth, so connection should fail
+        sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG);
+        sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG);
+        sslClientConfigs.remove(SslConfigs.SSL_KEY_PASSWORD_CONFIG);
+        createSelector(sslClientConfigs);
+        selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
+        NetworkTestUtils.waitForChannelClose(selector, node);
+        selector.close();
+        server.close();
+
+        // Listener-specific config should be used and client auth should be disabled
+        server = createEchoServer(clientListenerName, SecurityProtocol.SSL);
+        addr = new InetSocketAddress("localhost", server.port());
+
+        // Connect without client auth should work fine now
+        createSelector(sslClientConfigs);
+        selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
     
     /**
@@ -164,12 +203,12 @@ public class SslTransportLayerTest {
         String node = "0";
         sslServerConfigs = serverCertStores.getUntrustingConfig();
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "required");
-        createEchoServer(sslServerConfigs);        
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        waitForChannelClose(node);
+        NetworkTestUtils.waitForChannelClose(selector, node);
     }
     
     /**
@@ -180,16 +219,16 @@ public class SslTransportLayerTest {
     public void testClientAuthenticationRequiredNotProvided() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "required");
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         
         sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG);
         sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG);
         sslClientConfigs.remove(SslConfigs.SSL_KEY_PASSWORD_CONFIG);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        waitForChannelClose(node);
+        NetworkTestUtils.waitForChannelClose(selector, node);
     }
     
     /**
@@ -201,12 +240,12 @@ public class SslTransportLayerTest {
         String node = "0";
         sslServerConfigs = serverCertStores.getUntrustingConfig();
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "none");
-        createEchoServer(sslServerConfigs);      
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
     
     /**
@@ -217,16 +256,16 @@ public class SslTransportLayerTest {
     public void testClientAuthenticationDisabledNotProvided() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "none");
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         
         sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG);
         sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG);
         sslClientConfigs.remove(SslConfigs.SSL_KEY_PASSWORD_CONFIG);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
     
     /**
@@ -237,12 +276,12 @@ public class SslTransportLayerTest {
     public void testClientAuthenticationRequestedValidProvided() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "requested");
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
     
     /**
@@ -253,18 +292,33 @@ public class SslTransportLayerTest {
     public void testClientAuthenticationRequestedNotProvided() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_CLIENT_AUTH_CONFIG, "requested");
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         
         sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG);
         sslClientConfigs.remove(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG);
         sslClientConfigs.remove(SslConfigs.SSL_KEY_PASSWORD_CONFIG);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 100, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
     }
-    
+
+    /**
+     * Tests that an invalid SecureRandom implementation cannot be configured
+     */
+    @Test
+    public void testInvalidSecureRandomImplementation() throws Exception {
+        SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.CLIENT);
+        try {
+            sslClientConfigs.put(SslConfigs.SSL_SECURE_RANDOM_IMPLEMENTATION_CONFIG, "invalid");
+            channelBuilder.configure(sslClientConfigs);
+            fail("SSL channel configured with invalid SecureRandom implementation");
+        } catch (KafkaException e) {
+            // Expected exception
+        }
+    }
+
     /**
      * Tests that channels cannot be created if truststore cannot be loaded
      */
@@ -294,6 +348,24 @@ public class SslTransportLayerTest {
             // Expected exception
         }
     }
+
+    /**
+     * Tests that client connections can be created to a server
+     * if null truststore password is used
+     */
+    @Test
+    public void testNullTruststorePassword() throws Exception {
+        String node = "0";
+        sslClientConfigs.remove(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG);
+        sslServerConfigs.remove(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG);
+
+        server = createEchoServer(SecurityProtocol.SSL);
+        createSelector(sslClientConfigs);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
+        selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
+
+        NetworkTestUtils.checkClientConnection(selector, node, 100, 10);
+    }
     
     /**
      * Tests that client connections cannot be created to a server
@@ -303,12 +375,12 @@ public class SslTransportLayerTest {
     public void testInvalidKeyPassword() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_KEY_PASSWORD_CONFIG, new Password("invalid"));
-        createEchoServer(sslServerConfigs);        
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        waitForChannelClose(node);
+        NetworkTestUtils.waitForChannelClose(selector, node);
     }
     
     /**
@@ -318,14 +390,14 @@ public class SslTransportLayerTest {
     public void testUnsupportedTLSVersion() throws Exception {
         String node = "0";
         sslServerConfigs.put(SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG, Arrays.asList("TLSv1.2"));
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         
         sslClientConfigs.put(SslConfigs.SSL_ENABLED_PROTOCOLS_CONFIG, Arrays.asList("TLSv1.1"));
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        waitForChannelClose(node);
+        NetworkTestUtils.waitForChannelClose(selector, node);
     }
     
     /**
@@ -336,14 +408,14 @@ public class SslTransportLayerTest {
         String node = "0";
         String[] cipherSuites = SSLContext.getDefault().getDefaultSSLParameters().getCipherSuites();
         sslServerConfigs.put(SslConfigs.SSL_CIPHER_SUITES_CONFIG, Arrays.asList(cipherSuites[0]));
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         
         sslClientConfigs.put(SslConfigs.SSL_CIPHER_SUITES_CONFIG, Arrays.asList(cipherSuites[1]));
         createSelector(sslClientConfigs);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        waitForChannelClose(node);
+        NetworkTestUtils.waitForChannelClose(selector, node);
     }
 
     /**
@@ -352,12 +424,12 @@ public class SslTransportLayerTest {
     @Test
     public void testNetReadBufferResize() throws Exception {
         String node = "0";
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs, 10, null, null);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 64000, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 64000, 10);
     }
     
     /**
@@ -366,12 +438,12 @@ public class SslTransportLayerTest {
     @Test
     public void testNetWriteBufferResize() throws Exception {
         String node = "0";
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs, null, 10, null);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 64000, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 64000, 10);
     }
 
     /**
@@ -380,62 +452,62 @@ public class SslTransportLayerTest {
     @Test
     public void testApplicationBufferResize() throws Exception {
         String node = "0";
-        createEchoServer(sslServerConfigs);
+        server = createEchoServer(SecurityProtocol.SSL);
         createSelector(sslClientConfigs, null, null, 10);
-        InetSocketAddress addr = new InetSocketAddress("localhost", server.port);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
         selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
 
-        testClientConnection(node, 64000, 10);
+        NetworkTestUtils.checkClientConnection(selector, node, 64000, 10);
     }
 
-    private void testClientConnection(String node, int minMessageSize, int messageCount) throws Exception {
+    @Test
+    public void testCloseSsl() throws Exception {
+        testClose(SecurityProtocol.SSL, new SslChannelBuilder(Mode.CLIENT));
+    }
 
-        String prefix = TestUtils.randomString(minMessageSize);
-        int requests = 0;
-        int responses = 0;
-        // wait for handshake to finish
-        while (!selector.isChannelReady(node)) {
-            selector.poll(1000L);
+    @Test
+    public void testClosePlaintext() throws Exception {
+        testClose(SecurityProtocol.PLAINTEXT, new PlaintextChannelBuilder());
+    }
+
+    private void testClose(SecurityProtocol securityProtocol, ChannelBuilder clientChannelBuilder) throws Exception {
+        String node = "0";
+        server = createEchoServer(securityProtocol);
+        clientChannelBuilder.configure(sslClientConfigs);
+        this.selector = new Selector(5000, new Metrics(), new MockTime(), "MetricGroup", clientChannelBuilder);
+        InetSocketAddress addr = new InetSocketAddress("localhost", server.port());
+        selector.connect(node, addr, BUFFER_SIZE, BUFFER_SIZE);
+
+        NetworkTestUtils.waitForChannelReady(selector, node);
+
+        final ByteArrayOutputStream bytesOut = new ByteArrayOutputStream();
+        server.outputChannel(Channels.newChannel(bytesOut));
+        server.selector().muteAll();
+        byte[] message = TestUtils.randomString(100).getBytes();
+        int count = 20;
+        final int totalSendSize = count * (message.length + 4);
+        for (int i = 0; i < count; i++) {
+            selector.send(new NetworkSend(node, ByteBuffer.wrap(message)));
+            do {
+                selector.poll(0L);
+            } while (selector.completedSends().isEmpty());
         }
-        selector.send(new NetworkSend(node, ByteBuffer.wrap((prefix + "-0").getBytes())));
-        requests++;
-        while (responses < messageCount) {
-            selector.poll(0L);
-            assertEquals("No disconnects should have occurred.", 0, selector.disconnected().size());
+        server.selector().unmuteAll();
+        selector.close(node);
+        TestUtils.waitForCondition(new TestCondition() {
+            @Override
+            public boolean conditionMet() {
+                return bytesOut.toByteArray().length == totalSendSize;
+            }
+        }, 5000, "All requests sent were not processed");
+    }
 
-            for (NetworkReceive receive : selector.completedReceives()) {
-                assertEquals(prefix + "-" + responses, new String(Utils.toArray(receive.payload())));
-                responses++;
-            }
-
-            for (int i = 0; i < selector.completedSends().size() && requests < messageCount && selector.isChannelReady(node); i++, requests++) {
-                selector.send(new NetworkSend(node, ByteBuffer.wrap((prefix + "-" + requests).getBytes())));
-            }
-        }
-    }
-    
-    private void waitForChannelClose(String node) throws IOException {
-        boolean closed = false;
-        for (int i = 0; i < 30; i++) {
-            selector.poll(1000L);
-            if (selector.channel(node) == null) {
-                closed = true;
-                break;
-            }
-        }
-        assertTrue(closed);
-    }
-    
-    private void createEchoServer(Map<String, Object> sslServerConfigs) throws Exception {
-        server = new SslEchoServer(sslServerConfigs, "localhost");
-        server.start();
-    }
-    
     private void createSelector(Map<String, Object> sslClientConfigs) {
         createSelector(sslClientConfigs, null, null, null);
     }      
 
-    private void createSelector(Map<String, Object> sslClientConfigs, final Integer netReadBufSize, final Integer netWriteBufSize, final Integer appBufSize) {
+    private void createSelector(Map<String, Object> sslClientConfigs, final Integer netReadBufSize,
+                                final Integer netWriteBufSize, final Integer appBufSize) {
         
         this.channelBuilder = new SslChannelBuilder(Mode.CLIENT) {
 
@@ -454,33 +526,15 @@ public class SslTransportLayerTest {
         this.channelBuilder.configure(sslClientConfigs);
         this.selector = new Selector(5000, new Metrics(), new MockTime(), "MetricGroup", channelBuilder);
     }
-    
-    private static class CertStores {
-        
-        Map<String, Object> sslConfig;
-        
-        CertStores(boolean server, String host) throws Exception {
-            String name = server ? "server" : "client";
-            Mode mode = server ? Mode.SERVER : Mode.CLIENT;
-            File truststoreFile = File.createTempFile(name + "TS", ".jks");
-            sslConfig = TestSslUtils.createSslConfig(!server, true, mode, truststoreFile, name, host);
-            if (server)
-                sslConfig.put(SslConfigs.PRINCIPAL_BUILDER_CLASS_CONFIG, Class.forName(SslConfigs.DEFAULT_PRINCIPAL_BUILDER_CLASS));
-        }
-       
-        private Map<String, Object> getTrustingConfig(CertStores truststoreConfig) {
-            Map<String, Object> config = new HashMap<>(sslConfig);
-            config.put(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, truststoreConfig.sslConfig.get(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG));
-            config.put(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, truststoreConfig.sslConfig.get(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG));
-            config.put(SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG, truststoreConfig.sslConfig.get(SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG));
-            return config;
-        }
-        
-        private Map<String, Object> getUntrustingConfig() {
-            return sslConfig;
-        }
+
+    private NioEchoServer createEchoServer(ListenerName listenerName, SecurityProtocol securityProtocol) throws Exception {
+        return NetworkTestUtils.createEchoServer(listenerName, securityProtocol, new TestSecurityConfig(sslServerConfigs));
     }
 
+    private NioEchoServer createEchoServer(SecurityProtocol securityProtocol) throws Exception {
+        return createEchoServer(ListenerName.forSecurityProtocol(securityProtocol), securityProtocol);
+    }
+    
     /**
      * SSLTransportLayer with overrides for packet and application buffer size to test buffer resize
      * code path. The overridden buffer size starts with a small value and increases in size when the buffer
@@ -534,118 +588,6 @@ public class SslTransportLayerTest {
                     size = bufSizeOverride;
                 }
                 return size;
-            }
-        }
-    }
-    
-    // Non-blocking EchoServer implementation that uses SSLTransportLayer
-    private class SslEchoServer extends Thread {
-        private final int port;
-        private final ServerSocketChannel serverSocketChannel;
-        private final List<SocketChannel> newChannels;
-        private final List<SocketChannel> socketChannels;
-        private final AcceptorThread acceptorThread;
-        private SslFactory sslFactory;
-        private final Selector selector;
-        private final ConcurrentLinkedQueue<NetworkSend> inflightSends = new ConcurrentLinkedQueue<NetworkSend>();
-
-        public SslEchoServer(Map<String, ?> configs, String serverHost) throws Exception {
-            this.sslFactory = new SslFactory(Mode.SERVER);
-            this.sslFactory.configure(configs);
-            serverSocketChannel = ServerSocketChannel.open();
-            serverSocketChannel.configureBlocking(false);
-            serverSocketChannel.socket().bind(new InetSocketAddress(serverHost, 0));
-            this.port = serverSocketChannel.socket().getLocalPort();
-            this.socketChannels = Collections.synchronizedList(new ArrayList<SocketChannel>());
-            this.newChannels = Collections.synchronizedList(new ArrayList<SocketChannel>());
-            SslChannelBuilder channelBuilder = new SslChannelBuilder(Mode.SERVER);
-            channelBuilder.configure(sslServerConfigs);
-            this.selector = new Selector(5000, new Metrics(), new MockTime(), "MetricGroup", channelBuilder);
-            setName("echoserver");
-            setDaemon(true);
-            acceptorThread = new AcceptorThread();
-        }
-
-        @Override
-        public void run() {
-            try {
-                acceptorThread.start();
-                while (serverSocketChannel.isOpen()) {
-                    selector.poll(1000);
-                    for (SocketChannel socketChannel : newChannels) {
-                        String id = id(socketChannel);
-                        selector.register(id, socketChannel);
-                        socketChannels.add(socketChannel);
-                    }
-                    newChannels.clear();
-                    while (true) {
-                        NetworkSend send = inflightSends.peek();
-                        if (send != null && !selector.channel(send.destination()).hasSend()) {
-                            send = inflightSends.poll();
-                            selector.send(send);
-                        } else
-                            break;
-                    }
-                    List<NetworkReceive> completedReceives = selector.completedReceives();
-                    for (NetworkReceive rcv : completedReceives) {
-                        NetworkSend send = new NetworkSend(rcv.source(), rcv.payload());
-                        if (!selector.channel(send.destination()).hasSend())
-                            selector.send(send);
-                        else
-                            inflightSends.add(send);
-                    }
-                }
-            } catch (IOException e) {
-                // ignore
-            }
-        }
-        
-        private String id(SocketChannel channel) {
-            return channel.socket().getLocalAddress().getHostAddress() + ":" + channel.socket().getLocalPort() + "-" +
-                    channel.socket().getInetAddress().getHostAddress() + ":" + channel.socket().getPort();
-        }
-
-        public void closeConnections() throws IOException {
-            for (SocketChannel channel : socketChannels)
-                channel.close();
-            socketChannels.clear();
-        }
-
-        public void close() throws IOException, InterruptedException {
-            this.serverSocketChannel.close();
-            closeConnections();
-            acceptorThread.interrupt();
-            acceptorThread.join();
-            interrupt();
-            join();
-        }
-        
-        private class AcceptorThread extends Thread {
-            public AcceptorThread() throws IOException {
-                setName("acceptor");
-            }
-            public void run() {
-                try {
-
-                    java.nio.channels.Selector acceptSelector = java.nio.channels.Selector.open();
-                    serverSocketChannel.register(acceptSelector, SelectionKey.OP_ACCEPT);
-                    while (serverSocketChannel.isOpen()) {
-                        if (acceptSelector.select(1000) > 0) {
-                            Iterator<SelectionKey> it = acceptSelector.selectedKeys().iterator();
-                            while (it.hasNext()) {
-                                SelectionKey key = it.next();
-                                if (key.isAcceptable()) {
-                                    SocketChannel socketChannel = ((ServerSocketChannel) key.channel()).accept();
-                                    socketChannel.configureBlocking(false);
-                                    newChannels.add(socketChannel);
-                                    selector.wakeup();
-                                }
-                            }
-                        }
-                    }
-                } catch (IOException e) {
-                    // ignore
-                }
             }
         }
     }

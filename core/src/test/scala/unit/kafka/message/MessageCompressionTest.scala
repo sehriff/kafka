@@ -49,7 +49,7 @@ class MessageCompressionTest extends JUnitSuite {
     testCompressSize(GZIPCompressionCodec, messages, 396)
 
     if(isSnappyAvailable)
-      testCompressSize(SnappyCompressionCodec, messages, 502)
+      testCompressSize(SnappyCompressionCodec, messages, 1063)
 
     if(isLZ4Available)
       testCompressSize(LZ4CompressionCodec, messages, 387)
@@ -73,8 +73,7 @@ class MessageCompressionTest extends JUnitSuite {
       new org.xerial.snappy.SnappyOutputStream(new ByteArrayOutputStream())
       true
     } catch {
-      case e: UnsatisfiedLinkError => false
-      case e: org.xerial.snappy.SnappyError => false
+      case _: UnsatisfiedLinkError | _: org.xerial.snappy.SnappyError => false
     }
   }
 
@@ -83,7 +82,7 @@ class MessageCompressionTest extends JUnitSuite {
       new net.jpountz.lz4.LZ4BlockOutputStream(new ByteArrayOutputStream())
       true
     } catch {
-      case e: UnsatisfiedLinkError => false
+      case _: UnsatisfiedLinkError => false
     }
   }
 }

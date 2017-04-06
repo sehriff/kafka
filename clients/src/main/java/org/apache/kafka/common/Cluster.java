@@ -1,14 +1,18 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to You under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.kafka.common;
 
@@ -29,27 +33,56 @@ import java.util.Set;
  */
 public final class Cluster {
 
+    private final boolean isBootstrapConfigured;
     private final List<Node> nodes;
     private final Set<String> unauthorizedTopics;
+    private final Set<String> internalTopics;
     private final Map<TopicPartition, PartitionInfo> partitionsByTopicPartition;
     private final Map<String, List<PartitionInfo>> partitionsByTopic;
     private final Map<String, List<PartitionInfo>> availablePartitionsByTopic;
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
     private final Map<Integer, Node> nodesById;
+    private final ClusterResource clusterResource;
 
     /**
      * Create a new cluster with the given nodes and partitions
      * @param nodes The nodes in the cluster
      * @param partitions Information about a subset of the topic-partitions this cluster hosts
+     * @deprecated Use the Cluster constructor with 5 parameters
      */
+    @Deprecated
     public Cluster(Collection<Node> nodes,
                    Collection<PartitionInfo> partitions,
                    Set<String> unauthorizedTopics) {
+        this(null, false, nodes, partitions, unauthorizedTopics, Collections.<String>emptySet());
+    }
+
+
+    /**
+     * Create a new cluster with the given id, nodes and partitions
+     * @param nodes The nodes in the cluster
+     * @param partitions Information about a subset of the topic-partitions this cluster hosts
+     */
+    public Cluster(String clusterId,
+                   Collection<Node> nodes,
+                   Collection<PartitionInfo> partitions,
+                   Set<String> unauthorizedTopics,
+                   Set<String> internalTopics) {
+        this(clusterId, false, nodes, partitions, unauthorizedTopics, internalTopics);
+    }
+
+    private Cluster(String clusterId,
+                    boolean isBootstrapConfigured,
+                    Collection<Node> nodes,
+                    Collection<PartitionInfo> partitions,
+                    Set<String> unauthorizedTopics,
+                    Set<String> internalTopics) {
+        this.isBootstrapConfigured = isBootstrapConfigured;
+        this.clusterResource = new ClusterResource(clusterId);
         // make a randomized, unmodifiable copy of the nodes
         List<Node> copy = new ArrayList<>(nodes);
         Collections.shuffle(copy);
         this.nodes = Collections.unmodifiableList(copy);
-        
         this.nodesById = new HashMap<>();
         for (Node node : nodes)
             this.nodesById.put(node.id(), node);
@@ -96,13 +129,15 @@ public final class Cluster {
             this.partitionsByNode.put(entry.getKey(), Collections.unmodifiableList(entry.getValue()));
 
         this.unauthorizedTopics = Collections.unmodifiableSet(unauthorizedTopics);
+        this.internalTopics = Collections.unmodifiableSet(internalTopics);
     }
 
     /**
      * Create an empty cluster instance with no nodes and no topic-partitions.
      */
     public static Cluster empty() {
-        return new Cluster(new ArrayList<Node>(0), new ArrayList<PartitionInfo>(0), Collections.<String>emptySet());
+        return new Cluster(null, new ArrayList<Node>(0), new ArrayList<PartitionInfo>(0), Collections.<String>emptySet(),
+                Collections.<String>emptySet());
     }
 
     /**
@@ -115,7 +150,7 @@ public final class Cluster {
         int nodeId = -1;
         for (InetSocketAddress address : addresses)
             nodes.add(new Node(nodeId--, address.getHostString(), address.getPort()));
-        return new Cluster(nodes, new ArrayList<PartitionInfo>(0), Collections.<String>emptySet());
+        return new Cluster(null, true, nodes, new ArrayList<PartitionInfo>(0), Collections.<String>emptySet(), Collections.<String>emptySet());
     }
 
     /**
@@ -124,7 +159,8 @@ public final class Cluster {
     public Cluster withPartitions(Map<TopicPartition, PartitionInfo> partitions) {
         Map<TopicPartition, PartitionInfo> combinedPartitions = new HashMap<>(this.partitionsByTopicPartition);
         combinedPartitions.putAll(partitions);
-        return new Cluster(this.nodes, combinedPartitions.values(), new HashSet<>(this.unauthorizedTopics));
+        return new Cluster(clusterResource.clusterId(), this.nodes, combinedPartitions.values(),
+                new HashSet<>(this.unauthorizedTopics), new HashSet<>(this.internalTopics));
     }
 
     /**
@@ -171,25 +207,8 @@ public final class Cluster {
      * @return A list of partitions
      */
     public List<PartitionInfo> partitionsForTopic(String topic) {
-        return this.partitionsByTopic.get(topic);
-    }
-
-    /**
-     * Get the list of available partitions for this topic
-     * @param topic The topic name
-     * @return A list of partitions
-     */
-    public List<PartitionInfo> availablePartitionsForTopic(String topic) {
-        return this.availablePartitionsByTopic.get(topic);
-    }
-
-    /**
-     * Get the list of partitions whose leader is this node
-     * @param nodeId The node id
-     * @return A list of partitions
-     */
-    public List<PartitionInfo> partitionsForNode(int nodeId) {
-        return this.partitionsByNode.get(nodeId);
+        List<PartitionInfo> parts = this.partitionsByTopic.get(topic);
+        return (parts == null) ? Collections.<PartitionInfo>emptyList() : parts;
     }
 
     /**
@@ -198,8 +217,28 @@ public final class Cluster {
      * @return The number of partitions or null if there is no corresponding metadata
      */
     public Integer partitionCountForTopic(String topic) {
-        List<PartitionInfo> partitionInfos = this.partitionsByTopic.get(topic);
-        return partitionInfos == null ? null : partitionInfos.size();
+        List<PartitionInfo> partitions = this.partitionsByTopic.get(topic);
+        return partitions == null ? null : partitions.size();
+    }
+
+    /**
+     * Get the list of available partitions for this topic
+     * @param topic The topic name
+     * @return A list of partitions
+     */
+    public List<PartitionInfo> availablePartitionsForTopic(String topic) {
+        List<PartitionInfo> parts = this.availablePartitionsByTopic.get(topic);
+        return (parts == null) ? Collections.<PartitionInfo>emptyList() : parts;
+    }
+
+    /**
+     * Get the list of partitions whose leader is this node
+     * @param nodeId The node id
+     * @return A list of partitions
+     */
+    public List<PartitionInfo> partitionsForNode(int nodeId) {
+        List<PartitionInfo> parts = this.partitionsByNode.get(nodeId);
+        return (parts == null) ? Collections.<PartitionInfo>emptyList() : parts;
     }
 
     /**
@@ -214,9 +253,21 @@ public final class Cluster {
         return unauthorizedTopics;
     }
 
+    public Set<String> internalTopics() {
+        return internalTopics;
+    }
+
+    public boolean isBootstrapConfigured() {
+        return isBootstrapConfigured;
+    }
+
+    public ClusterResource clusterResource() {
+        return clusterResource;
+    }
+
     @Override
     public String toString() {
-        return "Cluster(nodes = " + this.nodes + ", partitions = " + this.partitionsByTopicPartition.values() + ")";
+        return "Cluster(id = " + clusterResource.clusterId() + ", nodes = " + this.nodes + ", partitions = " + this.partitionsByTopicPartition.values() + ")";
     }
 
 }

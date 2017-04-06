@@ -1,14 +1,18 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to You under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
- * 
- * http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.kafka.clients.producer;
 
@@ -36,7 +40,7 @@ package org.apache.kafka.clients.producer;
  * In either of the cases above, the timestamp that has actually been used will be returned to user in
  * {@link RecordMetadata}
  */
-public final class ProducerRecord<K, V> {
+public class ProducerRecord<K, V> {
 
     private final String topic;
     private final Integer partition;
@@ -55,9 +59,13 @@ public final class ProducerRecord<K, V> {
      */
     public ProducerRecord(String topic, Integer partition, Long timestamp, K key, V value) {
         if (topic == null)
-            throw new IllegalArgumentException("Topic cannot be null");
+            throw new IllegalArgumentException("Topic cannot be null.");
         if (timestamp != null && timestamp < 0)
-            throw new IllegalArgumentException("Invalid timestamp " + timestamp);
+            throw new IllegalArgumentException(
+                    String.format("Invalid timestamp: %d. Timestamp should always be non-negative or null.", timestamp));
+        if (partition != null && partition < 0)
+            throw new IllegalArgumentException(
+                    String.format("Invalid partition: %d. Partition number should always be non-negative or null.", partition));
         this.topic = topic;
         this.partition = partition;
         this.key = key;

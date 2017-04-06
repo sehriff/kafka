@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -24,33 +24,48 @@ import org.apache.kafka.common.errors.BrokerNotAvailableException;
 import org.apache.kafka.common.errors.ClusterAuthorizationException;
 import org.apache.kafka.common.errors.ControllerMovedException;
 import org.apache.kafka.common.errors.CorruptRecordException;
+import org.apache.kafka.common.errors.DuplicateSequenceNumberException;
 import org.apache.kafka.common.errors.GroupAuthorizationException;
 import org.apache.kafka.common.errors.GroupCoordinatorNotAvailableException;
 import org.apache.kafka.common.errors.GroupLoadInProgressException;
 import org.apache.kafka.common.errors.IllegalGenerationException;
+import org.apache.kafka.common.errors.IllegalSaslStateException;
 import org.apache.kafka.common.errors.InconsistentGroupProtocolException;
 import org.apache.kafka.common.errors.InvalidCommitOffsetSizeException;
+import org.apache.kafka.common.errors.InvalidConfigurationException;
 import org.apache.kafka.common.errors.InvalidFetchSizeException;
 import org.apache.kafka.common.errors.InvalidGroupIdException;
+import org.apache.kafka.common.errors.InvalidPartitionsException;
+import org.apache.kafka.common.errors.InvalidReplicaAssignmentException;
+import org.apache.kafka.common.errors.InvalidReplicationFactorException;
+import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.errors.InvalidRequiredAcksException;
+import org.apache.kafka.common.errors.OutOfOrderSequenceException;
 import org.apache.kafka.common.errors.InvalidSessionTimeoutException;
 import org.apache.kafka.common.errors.InvalidTimestampException;
 import org.apache.kafka.common.errors.InvalidTopicException;
 import org.apache.kafka.common.errors.LeaderNotAvailableException;
+import org.apache.kafka.common.errors.ProducerFencedException;
+import org.apache.kafka.common.errors.UnsupportedForMessageFormatException;
 import org.apache.kafka.common.errors.NetworkException;
+import org.apache.kafka.common.errors.NotControllerException;
 import org.apache.kafka.common.errors.NotCoordinatorForGroupException;
 import org.apache.kafka.common.errors.NotEnoughReplicasAfterAppendException;
 import org.apache.kafka.common.errors.NotEnoughReplicasException;
 import org.apache.kafka.common.errors.NotLeaderForPartitionException;
 import org.apache.kafka.common.errors.OffsetMetadataTooLarge;
 import org.apache.kafka.common.errors.OffsetOutOfRangeException;
+import org.apache.kafka.common.errors.PolicyViolationException;
 import org.apache.kafka.common.errors.RebalanceInProgressException;
 import org.apache.kafka.common.errors.RecordBatchTooLargeException;
 import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.apache.kafka.common.errors.ReplicaNotAvailableException;
 import org.apache.kafka.common.errors.RetriableException;
+import org.apache.kafka.common.errors.TopicExistsException;
+import org.apache.kafka.common.errors.UnsupportedSaslMechanismException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 import org.apache.kafka.common.errors.UnknownMemberIdException;
 import org.apache.kafka.common.errors.UnknownServerException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
@@ -130,12 +145,39 @@ public enum Errors {
     CLUSTER_AUTHORIZATION_FAILED(31,
             new ClusterAuthorizationException("Cluster authorization failed.")),
     INVALID_TIMESTAMP(32,
-            new InvalidTimestampException("The timestamp of the message is out of acceptable range."));
+            new InvalidTimestampException("The timestamp of the message is out of acceptable range.")),
+    UNSUPPORTED_SASL_MECHANISM(33,
+            new UnsupportedSaslMechanismException("The broker does not support the requested SASL mechanism.")),
+    ILLEGAL_SASL_STATE(34,
+            new IllegalSaslStateException("Request is not valid given the current SASL state.")),
+    UNSUPPORTED_VERSION(35,
+            new UnsupportedVersionException("The version of API is not supported.")),
+    TOPIC_ALREADY_EXISTS(36,
+            new TopicExistsException("Topic with this name already exists.")),
+    INVALID_PARTITIONS(37,
+            new InvalidPartitionsException("Number of partitions is invalid.")),
+    INVALID_REPLICATION_FACTOR(38,
+            new InvalidReplicationFactorException("Replication-factor is invalid.")),
+    INVALID_REPLICA_ASSIGNMENT(39,
+            new InvalidReplicaAssignmentException("Replica assignment is invalid.")),
+    INVALID_CONFIG(40,
+            new InvalidConfigurationException("Configuration is invalid.")),
+    NOT_CONTROLLER(41,
+        new NotControllerException("This is not the correct controller for this cluster.")),
+    INVALID_REQUEST(42,
+        new InvalidRequestException("This most likely occurs because of a request being malformed by the client library or" +
+            " the message was sent to an incompatible broker. See the broker logs for more details.")),
+    UNSUPPORTED_FOR_MESSAGE_FORMAT(43,
+        new UnsupportedForMessageFormatException("The message format version on the broker does not support the request.")),
+    POLICY_VIOLATION(44, new PolicyViolationException("Request parameters do not satisfy the configured policy.")),
+    OUT_OF_ORDER_SEQUENCE_NUMBER(45, new OutOfOrderSequenceException("The broker received an out of order sequence number")),
+    DUPLICATE_SEQUENCE_NUMBER(46, new DuplicateSequenceNumberException("The broker received a duplicate sequence number")),
+    PRODUCER_FENCED(47, new ProducerFencedException("Producer attempted an operation with an old epoch"));
 
     private static final Logger log = LoggerFactory.getLogger(Errors.class);
 
-    private static Map<Class<?>, Errors> classToError = new HashMap<Class<?>, Errors>();
-    private static Map<Short, Errors> codeToError = new HashMap<Short, Errors>();
+    private static Map<Class<?>, Errors> classToError = new HashMap<>();
+    private static Map<Short, Errors> codeToError = new HashMap<>();
 
     static {
         for (Errors error : Errors.values()) {
@@ -148,7 +190,7 @@ public enum Errors {
     private final short code;
     private final ApiException exception;
 
-    private Errors(int code, ApiException exception) {
+    Errors(int code, ApiException exception) {
         this.code = (short) code;
         this.exception = exception;
     }
@@ -161,10 +203,10 @@ public enum Errors {
     }
 
     /**
-     * Returns the class name of the exception
+     * Returns the class name of the exception or null if this is {@code Errors.NONE}.
      */
     public String exceptionName() {
-        return exception.getClass().getName();
+        return exception == null ? null : exception.getClass().getName();
     }
 
     /**
@@ -211,7 +253,7 @@ public enum Errors {
      * If there are multiple matches in the class hierarchy, the first match starting from the bottom is used.
      */
     public static Errors forException(Throwable t) {
-        Class clazz = t.getClass();
+        Class<?> clazz = t.getClass();
         while (clazz != null) {
             Errors error = classToError.get(clazz);
             if (error != null)

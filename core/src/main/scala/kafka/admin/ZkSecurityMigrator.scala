@@ -18,20 +18,18 @@
 package kafka.admin
 
 import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
+
 import joptsimple.OptionParser
 import org.I0Itec.zkclient.exception.ZkException
-import kafka.utils.{Logging, ZkUtils, CommandLineUtils}
-import org.apache.log4j.Level
+import kafka.utils.{CommandLineUtils, Logging, ZkUtils}
 import org.apache.kafka.common.security.JaasUtils
 import org.apache.zookeeper.AsyncCallback.{ChildrenCallback, StatCallback}
 import org.apache.zookeeper.data.Stat
 import org.apache.zookeeper.KeeperException
 import org.apache.zookeeper.KeeperException.Code
+
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
-import scala.collection._
 import scala.collection.mutable.Queue
 import scala.concurrent._
 import scala.concurrent.duration._
@@ -48,9 +46,9 @@ import scala.concurrent.duration._
  * 2- Perform a second rolling upgrade keeping the system property for the login file
  * and now setting zookeeper.set.acl to true
  * 3- Finally run this tool. There is a script under ./bin. Run 
- *   ./bin/zookeeper-security-migration --help
+ *   ./bin/zookeeper-security-migration.sh --help
  * to see the configuration parameters. An example of running it is the following:
- *  ./bin/zookeeper-security-migration --zookeeper.acl=secure --zookeeper.connection=localhost:2181
+ *  ./bin/zookeeper-security-migration.sh --zookeeper.acl=secure --zookeeper.connect=localhost:2181
  * 
  * To convert a cluster from secure to unsecure, we need to perform the following
  * steps:
@@ -67,7 +65,7 @@ object ZkSecurityMigrator extends Logging {
 
   def run(args: Array[String]) {
     var jaasFile = System.getProperty(JaasUtils.JAVA_LOGIN_CONFIG_PARAM)
-    val parser = new OptionParser()
+    val parser = new OptionParser
     val zkAclOpt = parser.accepts("zookeeper.acl", "Indicates whether to make the Kafka znodes in ZooKeeper secure or unsecure."
         + " The options are 'secure' and 'unsecure'").withRequiredArg().ofType(classOf[String])
     val zkUrlOpt = parser.accepts("zookeeper.connect", "Sets the ZooKeeper connect string (ensemble). This parameter " +
@@ -83,9 +81,9 @@ object ZkSecurityMigrator extends Logging {
     if (options.has(helpOpt))
       CommandLineUtils.printUsageAndDie(parser, usageMessage)
 
-    if ((jaasFile == null)) {
-     val errorMsg = ("No JAAS configuration file has been specified. Please make sure that you have set " +
-                    "the system property %s".format(JaasUtils.JAVA_LOGIN_CONFIG_PARAM))
+    if (jaasFile == null) {
+     val errorMsg = "No JAAS configuration file has been specified. Please make sure that you have set " +
+       "the system property %s".format(JaasUtils.JAVA_LOGIN_CONFIG_PARAM)
      System.out.println("ERROR: %s".format(errorMsg))
      throw new IllegalArgumentException("Incorrect configuration")
     }
@@ -125,7 +123,6 @@ object ZkSecurityMigrator extends Logging {
 }
 
 class ZkSecurityMigrator(zkUtils: ZkUtils) extends Logging {
-  private val workQueue = new LinkedBlockingQueue[Runnable]
   private val futures = new Queue[Future[String]]
 
   private def setAcl(path: String, setPromise: Promise[String]) = {
@@ -223,12 +220,12 @@ class ZkSecurityMigrator(zkUtils: ZkUtils) extends Logging {
   private def run(): Unit = {
     try {
       setAclIndividually("/")
-      for (path <- zkUtils.securePersistentZkPaths) {
+      for (path <- ZkUtils.SecureZkRootPaths) {
         debug("Going to set ACL for %s".format(path))
         zkUtils.makeSurePersistentPathExists(path)
         setAclsRecursively(path)
       }
-      
+
       @tailrec
       def recurse(): Unit = {
         val future = futures.synchronized { 

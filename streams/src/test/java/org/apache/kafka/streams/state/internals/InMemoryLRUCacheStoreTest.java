@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +16,20 @@
  */
 package org.apache.kafka.streams.state.internals;
 
+import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.processor.ProcessorContext;
 import org.apache.kafka.streams.processor.StateStoreSupplier;
 import org.apache.kafka.streams.state.KeyValueStore;
-import org.apache.kafka.streams.state.KeyValueStoreTestDriver;
 import org.apache.kafka.streams.state.Stores;
 import org.junit.Test;
 
+
+import java.util.Arrays;
+import java.util.List;
+
+import static org.hamcrest.CoreMatchers.equalTo;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 
 public class InMemoryLRUCacheStoreTest extends AbstractKeyValueStoreTest {
@@ -49,56 +55,87 @@ public class InMemoryLRUCacheStoreTest extends AbstractKeyValueStoreTest {
     }
 
     @Test
-    public void testEvict() {
-        // Create the test driver ...
-        KeyValueStoreTestDriver<Integer, String> driver = KeyValueStoreTestDriver.create(Integer.class, String.class);
-        KeyValueStore<Integer, String> store = createKeyValueStore(driver.context(), Integer.class, String.class, false);
+    public void shouldPutAllKeyValuePairs() {
+        final List<KeyValue<Integer, String>> kvPairs = Arrays.asList(KeyValue.pair(1, "1"),
+                KeyValue.pair(2, "2"),
+                KeyValue.pair(3, "3"));
 
-        try {
-            store.put(0, "zero");
-            store.put(1, "one");
-            store.put(2, "two");
-            store.put(3, "three");
-            store.put(4, "four");
-            store.put(5, "five");
-            store.put(6, "six");
-            store.put(7, "seven");
-            store.put(8, "eight");
-            store.put(9, "nine");
-            assertEquals(10, driver.sizeOf(store));
+        store.putAll(kvPairs);
 
-            store.put(10, "ten");
-            store.flush();
-            assertEquals(10, driver.sizeOf(store));
-            assertTrue(driver.flushedEntryRemoved(0));
-            assertEquals(1, driver.numFlushedEntryRemoved());
+        assertThat(store.approximateNumEntries(), equalTo(3L));
 
-            store.delete(1);
-            store.flush();
-            assertEquals(9, driver.sizeOf(store));
-            assertTrue(driver.flushedEntryRemoved(0));
-            assertTrue(driver.flushedEntryRemoved(1));
-            assertEquals(2, driver.numFlushedEntryRemoved());
-
-            store.put(11, "eleven");
-            store.flush();
-            assertEquals(10, driver.sizeOf(store));
-            assertEquals(2, driver.numFlushedEntryRemoved());
-
-            store.put(2, "two-again");
-            store.flush();
-            assertEquals(10, driver.sizeOf(store));
-            assertEquals(2, driver.numFlushedEntryRemoved());
-
-            store.put(12, "twelve");
-            store.flush();
-            assertEquals(10, driver.sizeOf(store));
-            assertTrue(driver.flushedEntryRemoved(0));
-            assertTrue(driver.flushedEntryRemoved(1));
-            assertTrue(driver.flushedEntryRemoved(2));
-            assertEquals(3, driver.numFlushedEntryRemoved());
-        } finally {
-            store.close();
+        for (KeyValue<Integer, String> kvPair : kvPairs) {
+            assertThat(store.get(kvPair.key), equalTo(kvPair.value));
         }
     }
+
+    @Test
+    public void shouldUpdateValuesForExistingKeysOnPutAll() {
+        final List<KeyValue<Integer, String>> kvPairs = Arrays.asList(KeyValue.pair(1, "1"),
+                KeyValue.pair(2, "2"),
+                KeyValue.pair(3, "3"));
+
+        store.putAll(kvPairs);
+        
+
+        final List<KeyValue<Integer, String>> updatedKvPairs = Arrays.asList(KeyValue.pair(1, "ONE"),
+                KeyValue.pair(2, "TWO"),
+                KeyValue.pair(3, "THREE"));
+
+        store.putAll(updatedKvPairs);
+
+        assertThat(store.approximateNumEntries(), equalTo(3L));
+        
+        for (KeyValue<Integer, String> kvPair : updatedKvPairs) {
+            assertThat(store.get(kvPair.key), equalTo(kvPair.value));
+        }
+    }
+
+    @Test
+    public void testEvict() {
+        // Create the test driver ...
+        store.put(0, "zero");
+        store.put(1, "one");
+        store.put(2, "two");
+        store.put(3, "three");
+        store.put(4, "four");
+        store.put(5, "five");
+        store.put(6, "six");
+        store.put(7, "seven");
+        store.put(8, "eight");
+        store.put(9, "nine");
+        assertEquals(10, driver.sizeOf(store));
+
+        store.put(10, "ten");
+        store.flush();
+        assertEquals(10, driver.sizeOf(store));
+        assertTrue(driver.flushedEntryRemoved(0));
+        assertEquals(1, driver.numFlushedEntryRemoved());
+
+        store.delete(1);
+        store.flush();
+        assertEquals(9, driver.sizeOf(store));
+        assertTrue(driver.flushedEntryRemoved(0));
+        assertTrue(driver.flushedEntryRemoved(1));
+        assertEquals(2, driver.numFlushedEntryRemoved());
+
+        store.put(11, "eleven");
+        store.flush();
+        assertEquals(10, driver.sizeOf(store));
+        assertEquals(2, driver.numFlushedEntryRemoved());
+
+        store.put(2, "two-again");
+        store.flush();
+        assertEquals(10, driver.sizeOf(store));
+        assertEquals(2, driver.numFlushedEntryRemoved());
+
+        store.put(12, "twelve");
+        store.flush();
+        assertEquals(10, driver.sizeOf(store));
+        assertTrue(driver.flushedEntryRemoved(0));
+        assertTrue(driver.flushedEntryRemoved(1));
+        assertTrue(driver.flushedEntryRemoved(3));
+        assertEquals(3, driver.numFlushedEntryRemoved());
+    }
+    
 }

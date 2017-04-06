@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -41,7 +41,7 @@ import org.apache.kafka.common.utils.Time;
  * buffers are deallocated.
  * </ol>
  */
-public final class BufferPool {
+public class BufferPool {
 
     private final long totalMemory;
     private final int poolableSize;
@@ -65,8 +65,8 @@ public final class BufferPool {
     public BufferPool(long memory, int poolableSize, Metrics metrics, Time time, String metricGrpName) {
         this.poolableSize = poolableSize;
         this.lock = new ReentrantLock();
-        this.free = new ArrayDeque<ByteBuffer>();
-        this.waiters = new ArrayDeque<Condition>();
+        this.free = new ArrayDeque<>();
+        this.waiters = new ArrayDeque<>();
         this.totalMemory = memory;
         this.availableMemory = memory;
         this.metrics = metrics;
@@ -83,13 +83,13 @@ public final class BufferPool {
      * is configured with blocking mode.
      * 
      * @param size The buffer size to allocate in bytes
-     * @param maxTimeToBlock The maximum time in milliseconds to block for buffer memory to be available
+     * @param maxTimeToBlockMs The maximum time in milliseconds to block for buffer memory to be available
      * @return The buffer
      * @throws InterruptedException If the thread is interrupted while blocked
      * @throws IllegalArgumentException if size is larger than the total memory controlled by the pool (and hence we would block
      *         forever)
      */
-    public ByteBuffer allocate(int size, long maxTimeToBlock) throws InterruptedException {
+    public ByteBuffer allocate(int size, long maxTimeToBlockMs) throws InterruptedException {
         if (size > this.totalMemory)
             throw new IllegalArgumentException("Attempt to allocate " + size
                                                + " bytes, but there is a hard limit of "
@@ -104,29 +104,44 @@ public final class BufferPool {
 
             // now check if the request is immediately satisfiable with the
             // memory on hand or if we need to block
-            int freeListSize = this.free.size() * this.poolableSize;
+            int freeListSize = freeSize() * this.poolableSize;
             if (this.availableMemory + freeListSize >= size) {
                 // we have enough unallocated or pooled memory to immediately
                 // satisfy the request
                 freeUp(size);
                 this.availableMemory -= size;
                 lock.unlock();
-                return ByteBuffer.allocate(size);
+                return allocateByteBuffer(size);
             } else {
                 // we are out of memory and will have to block
                 int accumulated = 0;
                 ByteBuffer buffer = null;
                 Condition moreMemory = this.lock.newCondition();
+                long remainingTimeToBlockNs = TimeUnit.MILLISECONDS.toNanos(maxTimeToBlockMs);
                 this.waiters.addLast(moreMemory);
                 // loop over and over until we have a buffer or have reserved
                 // enough memory to allocate one
                 while (accumulated < size) {
-                    long startWait = time.nanoseconds();
-                    if (!moreMemory.await(maxTimeToBlock, TimeUnit.MILLISECONDS))
-                        throw new TimeoutException("Failed to allocate memory within the configured max blocking time");
-                    long endWait = time.nanoseconds();
-                    this.waitTime.record(endWait - startWait, time.milliseconds());
+                    long startWaitNs = time.nanoseconds();
+                    long timeNs;
+                    boolean waitingTimeElapsed;
+                    try {
+                        waitingTimeElapsed = !moreMemory.await(remainingTimeToBlockNs, TimeUnit.NANOSECONDS);
+                    } catch (InterruptedException e) {
+                        this.waiters.remove(moreMemory);
+                        throw e;
+                    } finally {
+                        long endWaitNs = time.nanoseconds();
+                        timeNs = Math.max(0L, endWaitNs - startWaitNs);
+                        this.waitTime.record(timeNs, time.milliseconds());
+                    }
 
+                    if (waitingTimeElapsed) {
+                        this.waiters.remove(moreMemory);
+                        throw new TimeoutException("Failed to allocate memory within the configured max blocking time " + maxTimeToBlockMs + " ms.");
+                    }
+
+                    remainingTimeToBlockNs -= timeNs;
                     // check if we can satisfy this request from the free list,
                     // otherwise allocate memory
                     if (accumulated == 0 && size == this.poolableSize && !this.free.isEmpty()) {
@@ -159,7 +174,7 @@ public final class BufferPool {
                 // unlock and return the buffer
                 lock.unlock();
                 if (buffer == null)
-                    return ByteBuffer.allocate(size);
+                    return allocateByteBuffer(size);
                 else
                     return buffer;
             }
@@ -167,6 +182,11 @@ public final class BufferPool {
             if (lock.isHeldByCurrentThread())
                 lock.unlock();
         }
+    }
+
+    // Protected for testing.
+    protected ByteBuffer allocateByteBuffer(int size) {
+        return ByteBuffer.allocate(size);
     }
 
     /**
@@ -183,7 +203,7 @@ public final class BufferPool {
      * memory as free.
      * 
      * @param buffer The buffer to return
-     * @param size The size of the buffer to mark as deallocated, note that this maybe smaller than buffer.capacity
+     * @param size The size of the buffer to mark as deallocated, note that this may be smaller than buffer.capacity
      *             since the buffer may re-allocate itself during in-place compression
      */
     public void deallocate(ByteBuffer buffer, int size) {
@@ -213,10 +233,15 @@ public final class BufferPool {
     public long availableMemory() {
         lock.lock();
         try {
-            return this.availableMemory + this.free.size() * this.poolableSize;
+            return this.availableMemory + freeSize() * (long) this.poolableSize;
         } finally {
             lock.unlock();
         }
+    }
+
+    // Protected for testing.
+    protected int freeSize() {
+        return this.free.size();
     }
 
     /**
@@ -255,5 +280,10 @@ public final class BufferPool {
      */
     public long totalMemory() {
         return this.totalMemory;
+    }
+
+    // package-private method used only for testing
+    Deque<Condition> waiters() {
+        return this.waiters;
     }
 }

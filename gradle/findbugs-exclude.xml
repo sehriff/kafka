@@ -1,0 +1,148 @@
+<!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+
+<FindBugsFilter>
+    <!-- Exclude a few findbugs codes.
+         EI: May expose internal representation by returning reference to mutable object.
+         EI2: May expose internal representation by incorporating reference to mutable object.
+         MS: Malicious code vulnerability.
+         See http://findbugs.sourceforge.net/bugDescriptions.html for a full description of the findbugs codes.
+    -->
+    <Match>
+        <Bug code="EI,EI2,MS"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress a warning about some static initializers in Schema using instances of a
+             subclass. -->
+        <Or>
+            <Class name="org.apache.kafka.connect.data.Schema"/>
+            <Class name="org.apache.kafka.connect.data.SchemaBuilder"/>
+        </Or>
+        <Bug pattern="IC_SUPERCLASS_USES_SUBCLASS_DURING_INITIALIZATION"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress warnings about unread protected fields in some public classes.
+             Although these are not read in Kafka Connect code, they are part of the API. -->
+        <Or>
+            <Class name="org.apache.kafka.connect.connector.Connector"/>
+            <Class name="org.apache.kafka.connect.sink.SinkTask"/>
+            <Class name="org.apache.kafka.connect.source.SourceTask"/>
+        </Or>
+        <Bug pattern="URF_UNREAD_PUBLIC_OR_PROTECTED_FIELD"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress warnings about converting an integer number of
+             milliseconds to a java.util.Date object.  We do this intentionally in
+             org.apache.kafka.connect.data.Time. -->
+        <Class name="org.apache.kafka.connect.data.Time"/>
+        <Method name="toLogical"/>
+        <Bug pattern="ICAST_INT_2_LONG_AS_INSTANT"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress some minor warnings about machine-generated code for LRU cache
+             benchmarking. -->
+        <Package name="org.apache.kafka.jmh.cache.generated"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress warnings about ignoring the return value of await.
+             This is done intentionally because we use other clues to determine
+             if the wait was cut short. -->
+        <Class name="org.apache.kafka.connect.runtime.WorkerSourceTask"/>
+        <Method name="execute"/>
+        <Bug pattern="RV_RETURN_VALUE_IGNORED"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress some warnings about intentional switch statement fallthrough. -->
+        <Class name="org.apache.kafka.connect.runtime.WorkerConnector"/>
+        <Or>
+            <Method name="doStart"/>
+            <Method name="pause"/>
+        </Or>
+        <Bug pattern="SF_SWITCH_FALLTHROUGH"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress some inconsistent synchronization warnings.  TODO: fix these.  See
+             KAFKA-4994. -->
+        <Class name="org.apache.kafka.connect.storage.OffsetStorageWriter"/>
+        <Bug pattern="IS2_INCONSISTENT_SYNC"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress a warning about intentional switch statement fallthrough. -->
+        <Class name="org.apache.kafka.common.security.authenticator.SaslClientAuthenticator"/>
+        <Method name="authenticate"/>
+        <Bug pattern="SF_SWITCH_FALLTHROUGH"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress a spurious warning about a missing default case. -->
+        <Or>
+            <Class name="org.apache.kafka.common.utils.Crc32"/>
+            <Class name="org.apache.kafka.common.utils.PureJavaCrc32C"/>
+        </Or>
+        <Method name="update"/>
+        <Bug pattern="SF_SWITCH_NO_DEFAULT"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress a warning about intentional missing default cases and fallthroughs. -->
+        <Class name="org.apache.kafka.common.utils.Utils"/>
+        <Method name="murmur2"/>
+        <Or>
+            <Bug pattern="SF_SWITCH_NO_DEFAULT"/>
+            <Bug pattern="SF_SWITCH_FALLTHROUGH"/>
+        </Or>
+    </Match>
+
+    <Match>
+        <!-- Suppress a spurious warning about locks not being released on all paths.
+             This happens because there is an 'if' statement that checks if we have the lock before
+             releasing it. -->
+        <Class name="org.apache.kafka.clients.producer.internals.BufferPool"/>
+        <Method name="allocate"/>
+        <Bug pattern="UL_UNRELEASED_LOCK"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress warnings about synchronizing on the UnsentRequests
+             ConcurrentHashMap.  This is done deliberately. -->
+        <Package name="org.apache.kafka.clients.consumer.internals"/>
+        <Source name="ConsumerNetworkClient.java"/>
+        <Bug pattern="JLM_JSR166_UTILCONCURRENT_MONITORENTER"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress inconsistent synchronization warnings about KerberosLogin#login.
+             See KAFKA-4991 for details. -->
+        <Class name="org.apache.kafka.common.security.kerberos.KerberosLogin"/>
+        <Bug pattern="IS2_INCONSISTENT_SYNC"/>
+    </Match>
+
+    <Match>
+        <!-- Suppress inconsistent synchronization warnings about
+             AbstractCoordinator#coordinator.  See KAFKA-4992 for details.-->
+        <Class name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator"/>
+        <Bug pattern="IS2_INCONSISTENT_SYNC"/>
+    </Match>
+</FindBugsFilter>

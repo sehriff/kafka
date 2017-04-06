@@ -33,7 +33,7 @@ case class ProducePartitionStatus(requiredOffset: Long, responseStatus: Partitio
   @volatile var acksPending = false
 
   override def toString = "[acksPending: %b, error: %d, startOffset: %d, requiredOffset: %d]"
-    .format(acksPending, responseStatus.errorCode, responseStatus.baseOffset, requiredOffset)
+    .format(acksPending, responseStatus.error.code, responseStatus.baseOffset, requiredOffset)
 }
 
 /**
@@ -58,10 +58,10 @@ class DelayedProduce(delayMs: Long,
 
   // first update the acks pending variable according to the error code
   produceMetadata.produceStatus.foreach { case (topicPartition, status) =>
-    if (status.responseStatus.errorCode == Errors.NONE.code) {
+    if (status.responseStatus.error == Errors.NONE) {
       // Timeout error state will be cleared when required acks are received
       status.acksPending = true
-      status.responseStatus.errorCode = Errors.REQUEST_TIMED_OUT.code
+      status.responseStatus.error = Errors.REQUEST_TIMED_OUT
     } else {
       status.acksPending = false
     }
@@ -81,33 +81,27 @@ class DelayedProduce(delayMs: Long,
    */
   override def tryComplete(): Boolean = {
     // check for each partition if it still has pending acks
-    produceMetadata.produceStatus.foreach { case (topicAndPartition, status) =>
-      trace("Checking produce satisfaction for %s, current status %s"
-        .format(topicAndPartition, status))
+    produceMetadata.produceStatus.foreach { case (topicPartition, status) =>
+      trace(s"Checking produce satisfaction for ${topicPartition}, current status $status")
       // skip those partitions that have already been satisfied
       if (status.acksPending) {
-        val partitionOpt = replicaManager.getPartition(topicAndPartition.topic, topicAndPartition.partition)
-        val (hasEnough, errorCode) = partitionOpt match {
+        val (hasEnough, error) = replicaManager.getPartition(topicPartition) match {
           case Some(partition) =>
             partition.checkEnoughReplicasReachOffset(status.requiredOffset)
           case None =>
             // Case A
-            (false, Errors.UNKNOWN_TOPIC_OR_PARTITION.code)
+            (false, Errors.UNKNOWN_TOPIC_OR_PARTITION)
         }
-        if (errorCode != Errors.NONE.code) {
-          // Case B.1
+        // Case B.1 || B.2
+        if (error != Errors.NONE || hasEnough) {
           status.acksPending = false
-          status.responseStatus.errorCode = errorCode
-        } else if (hasEnough) {
-          // Case B.2
-          status.acksPending = false
-          status.responseStatus.errorCode = Errors.NONE.code
+          status.responseStatus.error = error
         }
       }
     }
 
-    // check if each partition has satisfied at lease one of case A and case B
-    if (! produceMetadata.produceStatus.values.exists(p => p.acksPending))
+    // check if every partition has satisfied at least one of case A or B
+    if (!produceMetadata.produceStatus.values.exists(_.acksPending))
       forceComplete()
     else
       false

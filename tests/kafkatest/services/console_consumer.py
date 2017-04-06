@@ -13,18 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ducktape.utils.util import wait_until
-from ducktape.services.background_thread import BackgroundThreadService
-
-from kafkatest.services.kafka.directory import kafka_dir
-from kafkatest.services.kafka.version import TRUNK, LATEST_0_8_2, LATEST_0_9
-from kafkatest.services.monitor.jmx import JmxMixin
-from kafkatest.services.security.security_config import SecurityConfig
-
 import itertools
 import os
-import subprocess
 
+from ducktape.services.background_thread import BackgroundThreadService
+from ducktape.cluster.remoteaccount import RemoteCommandError
+
+from kafkatest.directory_layout.kafka_path import KafkaPathResolverMixin
+from kafkatest.services.monitor.jmx import JmxMixin
+from kafkatest.version import DEV_BRANCH, LATEST_0_8_2, LATEST_0_9, LATEST_0_10_0, V_0_10_0_0
 
 """
 0.8.2.1 ConsoleConsumer options
@@ -67,7 +64,7 @@ Option                                  Description
 """
 
 
-class ConsoleConsumer(JmxMixin, BackgroundThreadService):
+class ConsoleConsumer(KafkaPathResolverMixin, JmxMixin, BackgroundThreadService):
     # Root directory for persistent output
     PERSISTENT_ROOT = "/mnt/console_consumer"
     STDOUT_CAPTURE = os.path.join(PERSISTENT_ROOT, "console_consumer.stdout")
@@ -76,6 +73,8 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
     LOG_FILE = os.path.join(LOG_DIR, "console_consumer.log")
     LOG4J_CONFIG = os.path.join(PERSISTENT_ROOT, "tools-log4j.properties")
     CONFIG_FILE = os.path.join(PERSISTENT_ROOT, "console_consumer.properties")
+    JMX_TOOL_LOG = "/mnt/jmx_tool.log"
+    JMX_TOOL_ERROR_LOG = "/mnt/jmx_tool.err.log"
 
     logs = {
         "consumer_stdout": {
@@ -86,12 +85,19 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
             "collect_default": False},
         "consumer_log": {
             "path": LOG_FILE,
-            "collect_default": True}
+            "collect_default": True},
+        "jmx_log": {
+            "path" : JMX_TOOL_LOG,
+            "collect_default": False},
+        "jmx_err_log": {
+            "path": JMX_TOOL_ERROR_LOG,
+            "collect_default": False}
     }
 
-    def __init__(self, context, num_nodes, kafka, topic, group_id="test-consumer-group", new_consumer=False,
-                 message_validator=None, from_beginning=True, consumer_timeout_ms=None, version=TRUNK,
-                 client_id="console-consumer", print_key=False, jmx_object_names=None, jmx_attributes=[]):
+    def __init__(self, context, num_nodes, kafka, topic, group_id="test-consumer-group", new_consumer=True,
+                 message_validator=None, from_beginning=True, consumer_timeout_ms=None, version=DEV_BRANCH,
+                 client_id="console-consumer", print_key=False, jmx_object_names=None, jmx_attributes=None,
+                 enable_systest_events=False, stop_timeout_sec=15, print_timestamp=False):
         """
         Args:
             context:                    standard context
@@ -105,9 +111,14 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
                                         successively consumed messages exceeds this timeout. Setting this and
                                         waiting for the consumer to stop is a pretty good way to consume all messages
                                         in a topic.
-            print_key                   if True, print each message's key in addition to its value
+            print_key                   if True, print each message's key as well
+            enable_systest_events       if True, console consumer will print additional lifecycle-related information
+                                        only available in 0.10.0 and later.
+            stop_timeout_sec            After stopping a node, wait up to stop_timeout_sec for the node to stop,
+                                        and the corresponding background thread to finish successfully.
+            print_timestamp             if True, print each message's timestamp as well
         """
-        JmxMixin.__init__(self, num_nodes, jmx_object_names, jmx_attributes)
+        JmxMixin.__init__(self, num_nodes, jmx_object_names, jmx_attributes or [])
         BackgroundThreadService.__init__(self, context, num_nodes)
         self.kafka = kafka
         self.new_consumer = new_consumer
@@ -123,9 +134,18 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         self.from_beginning = from_beginning
         self.message_validator = message_validator
         self.messages_consumed = {idx: [] for idx in range(1, num_nodes + 1)}
+        self.clean_shutdown_nodes = set()
         self.client_id = client_id
         self.print_key = print_key
         self.log_level = "TRACE"
+        self.stop_timeout_sec = stop_timeout_sec
+
+        self.enable_systest_events = enable_systest_events
+        if self.enable_systest_events:
+            # Only available in 0.10.0 and up
+            assert version >= V_0_10_0_0
+
+        self.print_timestamp = print_timestamp
 
     def prop_file(self, node):
         """Return a string which can be used to create a configuration file appropriate for the given node."""
@@ -138,7 +158,8 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
 
         # Add security properties to the config. If security protocol is not specified,
         # use the default in the template properties.
-        self.security_config = self.kafka.security_config.client_config(prop_file)
+        self.security_config = self.kafka.security_config.client_config(prop_file, node)
+        self.security_config.setup_node(node)
 
         prop_file += str(self.security_config)
         return prop_file
@@ -154,7 +175,7 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         args['config_file'] = ConsoleConsumer.CONFIG_FILE
         args['stdout'] = ConsoleConsumer.STDOUT_CAPTURE
         args['jmx_port'] = self.jmx_port
-        args['kafka_dir'] = kafka_dir(node)
+        args['console_consumer'] = self.path.script("kafka-console-consumer.sh", node)
         args['broker_list'] = self.kafka.bootstrap_servers(self.security_config.security_protocol)
         args['kafka_opts'] = self.security_config.kafka_opts
 
@@ -162,11 +183,13 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
               "export LOG_DIR=%(log_dir)s; " \
               "export KAFKA_LOG4J_OPTS=\"-Dlog4j.configuration=file:%(log4j_config)s\"; " \
               "export KAFKA_OPTS=%(kafka_opts)s; " \
-              "/opt/%(kafka_dir)s/bin/kafka-console-consumer.sh " \
+              "%(console_consumer)s " \
               "--topic %(topic)s --consumer.config %(config_file)s" % args
 
         if self.new_consumer:
-            cmd += " --new-consumer --bootstrap-server %(broker_list)s" % args
+            if node.version <= LATEST_0_10_0:
+                cmd += " --new-consumer"
+            cmd += " --bootstrap-server %(broker_list)s" % args
         else:
             cmd += " --zookeeper %(zk_connect)s" % args
         if self.from_beginning:
@@ -181,9 +204,18 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         if self.print_key:
             cmd += " --property print.key=true"
 
+        if self.print_timestamp:
+            cmd += " --property print.timestamp=true"
+
         # LoggingMessageFormatter was introduced after 0.9
         if node.version > LATEST_0_9:
-            cmd+=" --formatter kafka.tools.LoggingMessageFormatter"
+            cmd += " --formatter kafka.tools.LoggingMessageFormatter"
+
+        if self.enable_systest_events:
+            # enable systest events is only available in 0.10.0 and later
+            # check the assertion here as well, in case node.version has been modified
+            assert node.version >= V_0_10_0_0
+            cmd += " --enable-systest-events"
 
         cmd += " 2>> %(stderr)s | tee -a %(stdout)s &" % args
         return cmd
@@ -193,7 +225,7 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
             cmd = "ps ax | grep -i console_consumer | grep java | grep -v grep | awk '{print $1}'"
             pid_arr = [pid for pid in node.account.ssh_capture(cmd, allow_fail=True, callback=int)]
             return pid_arr
-        except (subprocess.CalledProcessError, ValueError) as e:
+        except (RemoteCommandError, ValueError) as e:
             return []
 
     def alive(self, node):
@@ -208,7 +240,6 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         prop_file = self.prop_file(node)
         self.logger.info(prop_file)
         node.account.create_file(ConsoleConsumer.CONFIG_FILE, prop_file)
-        self.security_config.setup_node(node)
 
         # Create and upload log properties
         log_config = self.render('tools_log4j.properties', log_file=ConsoleConsumer.LOG_FILE)
@@ -222,14 +253,22 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         first_line = next(consumer_output, None)
 
         if first_line is not None:
+            self.logger.debug("collecting following jmx objects: %s", self.jmx_object_names)
+            self.init_jmx_attributes()
             self.start_jmx_tool(idx, node)
 
             for line in itertools.chain([first_line], consumer_output):
                 msg = line.strip()
-                if self.message_validator is not None:
-                    msg = self.message_validator(msg)
-                if msg is not None:
-                    self.messages_consumed[idx].append(msg)
+                if msg == "shutdown_complete":
+                    # Note that we can only rely on shutdown_complete message if running 0.10.0 or greater
+                    if node in self.clean_shutdown_nodes:
+                        raise Exception("Unexpected shutdown event from consumer, already shutdown. Consumer index: %d" % idx)
+                    self.clean_shutdown_nodes.add(node)
+                else:
+                    if self.message_validator is not None:
+                        msg = self.message_validator(msg)
+                    if msg is not None:
+                        self.messages_consumed[idx].append(msg)
 
             self.read_jmx_output(idx, node)
 
@@ -238,8 +277,10 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
 
     def stop_node(self, node):
         node.account.kill_process("console_consumer", allow_fail=True)
-        wait_until(lambda: not self.alive(node), timeout_sec=10, backoff_sec=.2,
-                   err_msg="Timed out waiting for consumer to stop.")
+
+        stopped = self.wait_node(node, timeout_sec=self.stop_timeout_sec)
+        assert stopped, "Node %s: did not stop within the specified timeout of %s seconds" % \
+                        (str(node.account), str(self.stop_timeout_sec))
 
     def clean_node(self, node):
         if self.alive(node):
@@ -249,3 +290,24 @@ class ConsoleConsumer(JmxMixin, BackgroundThreadService):
         node.account.kill_process("java", clean_shutdown=False, allow_fail=True)
         node.account.ssh("rm -rf %s" % ConsoleConsumer.PERSISTENT_ROOT, allow_fail=False)
         self.security_config.clean_node(node)
+
+    def has_partitions_assigned(self, node):
+       if self.new_consumer is False:
+          return False
+       idx = self.idx(node)
+       self.init_jmx_attributes()
+       self.start_jmx_tool(idx, node)
+       self.read_jmx_output(idx, node)
+       if not self.assigned_partitions_jmx_attr in self.maximum_jmx_value:
+           return False
+       self.logger.debug("Number of partitions assigned %f" % self.maximum_jmx_value[self.assigned_partitions_jmx_attr])
+       return self.maximum_jmx_value[self.assigned_partitions_jmx_attr] > 0.0
+
+    def init_jmx_attributes(self):
+        if self.new_consumer is True:
+            if self.jmx_object_names is None:
+                self.jmx_object_names = []
+                self.jmx_object_names += ["kafka.consumer:type=consumer-coordinator-metrics,client-id=%s" % self.client_id]
+                self.jmx_attributes += ["assigned-partitions"]
+                self.assigned_partitions_jmx_attr = "kafka.consumer:type=consumer-coordinator-metrics,client-id=%s:assigned-partitions" % self.client_id
+

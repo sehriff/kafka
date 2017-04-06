@@ -17,11 +17,9 @@
 
 package kafka.server
 
-import kafka.utils.ZkUtils
-import kafka.utils.CoreUtils
-import kafka.utils.TestUtils
-
+import kafka.utils.{CoreUtils, TestUtils, ZkUtils}
 import kafka.zk.ZooKeeperTestHarness
+import org.easymock.EasyMock
 import org.junit.Assert._
 import org.junit.Test
 
@@ -40,7 +38,29 @@ class ServerStartupTest extends ZooKeeperTestHarness {
     assertTrue(pathExists)
 
     server.shutdown()
-    CoreUtils.rm(server.config.logDirs)
+    CoreUtils.delete(server.config.logDirs)
+  }
+
+  @Test
+  def testConflictBrokerStartupWithSamePort {
+    // Create and start first broker
+    val brokerId1 = 0
+    val props1 = TestUtils.createBrokerConfig(brokerId1, zkConnect)
+    val server1 = TestUtils.createServer(KafkaConfig.fromProps(props1))
+    val port = TestUtils.boundPort(server1)
+
+    // Create a second broker with same port
+    val brokerId2 = 1
+    val props2 = TestUtils.createBrokerConfig(brokerId2, zkConnect, port = port)
+    try {
+      TestUtils.createServer(KafkaConfig.fromProps(props2))
+      fail("Starting a broker with the same port should fail")
+    } catch {
+      case _: RuntimeException => // expected
+    } finally {
+      server1.shutdown()
+      CoreUtils.delete(server1.config.logDirs)
+    }
   }
 
   @Test
@@ -58,7 +78,7 @@ class ServerStartupTest extends ZooKeeperTestHarness {
       TestUtils.createServer(KafkaConfig.fromProps(props2))
       fail("Registering a broker with a conflicting id should fail")
     } catch {
-      case e : RuntimeException =>
+      case _: RuntimeException =>
       // this is expected
     }
 
@@ -66,7 +86,7 @@ class ServerStartupTest extends ZooKeeperTestHarness {
     assertEquals(brokerRegistration, zkUtils.readData(ZkUtils.BrokerIdsPath + "/" + brokerId)._1)
 
     server1.shutdown()
-    CoreUtils.rm(server1.config.logDirs)
+    CoreUtils.delete(server1.config.logDirs)
   }
 
   @Test
@@ -80,6 +100,32 @@ class ServerStartupTest extends ZooKeeperTestHarness {
     assertEquals(brokerId, server.metadataCache.getAliveBrokers.head.id)
 
     server.shutdown()
-    CoreUtils.rm(server.config.logDirs)
+    CoreUtils.delete(server.config.logDirs)
+  }
+
+  @Test
+  def testBrokerStateRunningAfterZK {
+    val brokerId = 0
+    val mockBrokerState = EasyMock.niceMock(classOf[kafka.server.BrokerState])
+
+    class BrokerStateInterceptor() extends BrokerState {
+      override def newState(newState: BrokerStates): Unit = {
+        val brokers = zkUtils.getAllBrokersInCluster()
+        assertEquals(1, brokers.size)
+        assertEquals(brokerId, brokers.head.id)
+      }
+    }
+
+    class MockKafkaServer(override val config: KafkaConfig, override val brokerState: BrokerState = mockBrokerState) extends KafkaServer(config) {}
+
+    val props = TestUtils.createBrokerConfig(brokerId, zkConnect)
+    val server = new MockKafkaServer(KafkaConfig.fromProps(props))
+
+    EasyMock.expect(mockBrokerState.newState(RunningAsBroker)).andDelegateTo(new BrokerStateInterceptor).once()
+    EasyMock.replay(mockBrokerState)
+
+    server.startup()
+    server.shutdown()
+    CoreUtils.delete(server.config.logDirs)
   }
 }

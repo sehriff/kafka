@@ -19,7 +19,7 @@ package kafka.api
 
 import java.nio.ByteBuffer
 
-import kafka.common.{TopicAndPartition}
+import kafka.common.TopicAndPartition
 import kafka.api.ApiUtils._
 import kafka.network.{RequestOrResponseSend, RequestChannel}
 import kafka.network.RequestChannel.Response
@@ -63,12 +63,12 @@ case class ControlledShutdownRequest(versionId: Short,
       4 /* broker id */
   }
 
-  override def toString(): String = {
+  override def toString: String = {
     describe(true)
   }
 
-  override  def handleError(e: Throwable, requestChannel: RequestChannel, request: RequestChannel.Request): Unit = {
-    val errorResponse = ControlledShutdownResponse(correlationId, Errors.forException(e).code, Set.empty[TopicAndPartition])
+  override def handleError(e: Throwable, requestChannel: RequestChannel, request: RequestChannel.Request): Unit = {
+    val errorResponse = ControlledShutdownResponse(correlationId, Errors.forException(e), Set.empty[TopicAndPartition])
     requestChannel.sendResponse(new Response(request, new RequestOrResponseSend(request.connectionId, errorResponse)))
   }
 

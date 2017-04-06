@@ -15,6 +15,7 @@
 from kafkatest import __version__ as __kafkatest_version__
 
 import re
+import time
 
 
 def kafkatest_version():
@@ -71,3 +72,4 @@ def is_int_with_prefix(msg):
         raise Exception("Unexpected message format. Message should be of format: integer "
                         "prefix dot integer value, but one of the two parts (before or after dot) "
                         "are not integers. Message: %s" % (msg))
+
